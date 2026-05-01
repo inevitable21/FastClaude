@@ -65,22 +65,55 @@ pub fn kill_session(app: tauri::AppHandle, state: State<'_, AppState>, id: Strin
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
     sys.refresh_processes();
-    // Kill the leaf (claude/node.exe) AND its shell parent so the cmd /K shell
-    // doesn't linger after we end the session. Use Process::kill (TerminateProcess
-    // on Windows); kill_with(Signal::Term) is a no-op on Windows.
-    if let Some(p) = sys.process(Pid::from_u32(s.claude_pid as u32)) {
-        if let Some(parent_pid) = p.parent() {
-            if let Some(parent) = sys.process(parent_pid) {
-                parent.kill();
-            }
-        }
-        p.kill();
-    }
+    kill_session_chain(&sys, s.claude_pid as u32);
     state
         .registry
         .mark_ended(&id, chrono::Utc::now().timestamp())?;
     let _ = app.emit("session-changed", &id);
     Ok(())
+}
+
+/// Walk up the parent chain killing every process until we hit a host or
+/// system-critical process. This closes our specific terminal tab/window
+/// without touching multi-tab hosts (WindowsTerminal) or system services.
+///
+/// Typical chains we kill through:
+///   wt:   node.exe → cmd.exe → OpenConsole.exe   (stops at WindowsTerminal.exe)
+///   cmd:  node.exe → cmd.exe → conhost.exe       (stops at csrss.exe / orphan)
+fn kill_session_chain(sys: &System, claude_pid: u32) {
+    /// Walk stops here — never killed.
+    const STOP_AT: &[&str] = &[
+        "windowsterminal.exe",
+        "explorer.exe",
+        "csrss.exe",
+        "services.exe",
+        "wininit.exe",
+        "smss.exe",
+        "winlogon.exe",
+        "system",
+        "system idle process",
+    ];
+
+    let mut to_kill: Vec<Pid> = Vec::new();
+    let mut current = Some(Pid::from_u32(claude_pid));
+    for _ in 0..6 {
+        let Some(pid) = current else { break };
+        let Some(proc) = sys.process(pid) else { break };
+        let name = proc.name().to_lowercase();
+        if STOP_AT.iter().any(|h| name == *h) {
+            break;
+        }
+        to_kill.push(pid);
+        current = proc.parent();
+    }
+
+    // Kill outermost first so the conpty/console host disconnects before
+    // the inner shell exits — closes the window cleanly.
+    for pid in to_kill.iter().rev() {
+        if let Some(p) = sys.process(*pid) {
+            p.kill();
+        }
+    }
 }
 
 #[tauri::command]
