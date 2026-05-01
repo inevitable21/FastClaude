@@ -5,7 +5,7 @@ use crate::session_registry::{NewSession, Registry, Session};
 use crate::spawner::{SpawnRequest, Spawner};
 use crate::window_focus::WindowFocus;
 use std::sync::{Arc, Mutex};
-use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, Signal, System};
+use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tauri::{Emitter, State};
 
 pub struct AppState {
@@ -65,8 +65,16 @@ pub fn kill_session(app: tauri::AppHandle, state: State<'_, AppState>, id: Strin
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
     sys.refresh_processes();
+    // Kill the leaf (claude/node.exe) AND its shell parent so the cmd /K shell
+    // doesn't linger after we end the session. Use Process::kill (TerminateProcess
+    // on Windows); kill_with(Signal::Term) is a no-op on Windows.
     if let Some(p) = sys.process(Pid::from_u32(s.claude_pid as u32)) {
-        p.kill_with(Signal::Term);
+        if let Some(parent_pid) = p.parent() {
+            if let Some(parent) = sys.process(parent_pid) {
+                parent.kill();
+            }
+        }
+        p.kill();
     }
     state
         .registry
@@ -78,9 +86,11 @@ pub fn kill_session(app: tauri::AppHandle, state: State<'_, AppState>, id: Strin
 #[tauri::command]
 pub fn focus_session(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let s = state.registry.get(&id)?;
+    // Pass claude_pid; the focus impl walks up the parent chain to find a
+    // visible-window-owning ancestor (e.g. WindowsTerminal.exe).
     state
         .focus
-        .focus(s.terminal_pid as u32, s.terminal_window_handle.as_deref())
+        .focus(s.claude_pid as u32, s.terminal_window_handle.as_deref())
 }
 
 #[tauri::command]

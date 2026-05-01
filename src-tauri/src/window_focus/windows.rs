@@ -1,5 +1,6 @@
 use super::WindowFocus;
 use crate::error::{AppError, AppResult};
+use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow,
@@ -10,8 +11,9 @@ pub struct WinFocus;
 
 impl WindowFocus for WinFocus {
     fn focus(&self, pid: u32, _handle: Option<&str>) -> AppResult<()> {
-        let hwnd = find_top_level_window(pid)
-            .ok_or_else(|| AppError::Focus(format!("no visible window for pid {pid}")))?;
+        let hwnd = find_window_for_pid(pid).or_else(|| find_window_for_ancestor(pid));
+        let hwnd = hwnd
+            .ok_or_else(|| AppError::Focus(format!("no visible window for pid {pid} or any ancestor")))?;
         unsafe {
             let _ = ShowWindow(hwnd, SW_RESTORE);
             if !SetForegroundWindow(hwnd).as_bool() {
@@ -25,7 +27,26 @@ impl WindowFocus for WinFocus {
     }
 }
 
-fn find_top_level_window(pid: u32) -> Option<HWND> {
+/// Walk up the parent chain looking for an ancestor that owns a visible
+/// top-level window. The leaf process we track (cmd.exe shell, or node.exe
+/// running claude) doesn't own a window — its terminal host (e.g.
+/// WindowsTerminal.exe) does.
+fn find_window_for_ancestor(start_pid: u32) -> Option<HWND> {
+    let sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+    );
+    let mut current = sys.process(Pid::from_u32(start_pid))?.parent()?;
+    for _ in 0..6 {
+        let pid = current.as_u32();
+        if let Some(hwnd) = find_window_for_pid(pid) {
+            return Some(hwnd);
+        }
+        current = sys.process(current)?.parent()?;
+    }
+    None
+}
+
+fn find_window_for_pid(pid: u32) -> Option<HWND> {
     struct State {
         target: u32,
         found: Option<HWND>,
