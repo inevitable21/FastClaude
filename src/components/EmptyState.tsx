@@ -1,4 +1,10 @@
-export function EmptyState({ onLaunch }: { onLaunch: () => void }) {
+export function EmptyState({
+  onLaunch,
+  hotkey,
+}: {
+  onLaunch: () => void;
+  hotkey?: string;
+}) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <h2 className="text-lg font-semibold">No running sessions</h2>
@@ -9,6 +15,11 @@ export function EmptyState({ onLaunch }: { onLaunch: () => void }) {
       >
         + Launch new session
       </button>
+      {hotkey && (
+        <div className="text-xs text-muted-foreground mt-2">
+          Shortcut: {hotkey}
+        </div>
+      )}
     </div>
   );
 }

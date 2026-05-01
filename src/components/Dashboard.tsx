@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { useState } from "react";
-import { listSessions, onSessionChanged } from "@/lib/ipc";
+import { listSessions, onSessionChanged, getConfig } from "@/lib/ipc";
 import type { Session } from "@/types";
 import { SessionRow } from "./SessionRow";
 import { LaunchDialog } from "./LaunchDialog";
@@ -18,6 +18,13 @@ export function Dashboard({
   setLaunchOpen: (v: boolean) => void;
 }) {
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [hotkey, setHotkey] = useState<string>("");
+
+  useEffect(() => {
+    getConfig()
+      .then((c) => setHotkey(c.hotkey))
+      .catch(() => setHotkey(""));
+  }, []);
 
   const refresh = useCallback(() => {
     listSessions()
@@ -41,7 +48,10 @@ export function Dashboard({
   return (
     <div className="bg-background text-foreground">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-        <div className="font-semibold">FastClaude</div>
+        <div className="flex items-center gap-2 font-semibold">
+          <img src="/icon.png" alt="" className="h-5 w-5 rounded-sm" />
+          FastClaude
+        </div>
         <button
           onClick={() => setLaunchOpen(true)}
           className="ml-auto px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm"
@@ -63,7 +73,7 @@ export function Dashboard({
       </div>
       <div className="p-4 min-h-[60vh]">
         {sessions.length === 0 ? (
-          <EmptyState onLaunch={() => setLaunchOpen(true)} />
+          <EmptyState onLaunch={() => setLaunchOpen(true)} hotkey={hotkey} />
         ) : (
           <>
             <div className="text-xs text-muted-foreground mb-2">
