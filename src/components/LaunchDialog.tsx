@@ -16,9 +16,8 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { launchSession, recentProjects, getConfig } from "@/lib/ipc";
+import { MODELS } from "@/lib/models";
 import type { RecentProject, AppConfig } from "@/types";
-
-const MODELS = ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"];
 
 export function LaunchDialog({
   open,

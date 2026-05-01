@@ -1,8 +1,16 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { getConfig, setConfig, clearFirstRun } from "@/lib/ipc";
+import { MODELS } from "@/lib/models";
 import type { AppConfig } from "@/types";
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
@@ -52,12 +60,22 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           (v) => setDraft({ ...draft, terminal_program: v }),
           "'auto' picks Windows Terminal if installed, else cmd.exe"
         )}
-        {field(
-          "Default model",
-          draft.default_model,
-          (v) => setDraft({ ...draft, default_model: v }),
-          "e.g. claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5"
-        )}
+        <label className="block">
+          <div className="text-xs font-medium mb-1">Default model</div>
+          <Select
+            value={draft.default_model}
+            onValueChange={(v) => setDraft({ ...draft, default_model: v })}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MODELS.map((m) => (
+                <SelectItem key={m} value={m}>{m}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
         {field(
           "Global hotkey",
           draft.hotkey,

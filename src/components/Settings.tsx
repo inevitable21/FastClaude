@@ -1,8 +1,16 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { getConfig, setConfig, checkForUpdate } from "@/lib/ipc";
+import { MODELS } from "@/lib/models";
 import type { AppConfig } from "@/types";
 
 export function Settings({ onBack }: { onBack: () => void }) {
@@ -67,9 +75,22 @@ export function Settings({ onBack }: { onBack: () => void }) {
         {field("Terminal program (or 'auto')", draft.terminal_program, (v) =>
           setDraft({ ...draft, terminal_program: v })
         )}
-        {field("Default model", draft.default_model, (v) =>
-          setDraft({ ...draft, default_model: v })
-        )}
+        <label className="block">
+          <div className="text-xs font-medium mb-1">Default model</div>
+          <Select
+            value={draft.default_model}
+            onValueChange={(v) => setDraft({ ...draft, default_model: v })}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MODELS.map((m) => (
+                <SelectItem key={m} value={m}>{m}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
         {field("Global hotkey", draft.hotkey, (v) =>
           setDraft({ ...draft, hotkey: v })
         )}
