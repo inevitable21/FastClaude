@@ -181,3 +181,45 @@ pub fn get_first_run(state: State<'_, AppState>) -> bool {
 pub fn clear_first_run(state: State<'_, AppState>) {
     state.is_first_run.store(false, Ordering::SeqCst);
 }
+
+use tauri_plugin_updater::UpdaterExt;
+
+#[derive(serde::Serialize)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub notes: Option<String>,
+}
+
+#[tauri::command]
+pub async fn check_for_update(app: tauri::AppHandle) -> AppResult<Option<UpdateInfo>> {
+    let updater = app
+        .updater()
+        .map_err(|e| crate::error::AppError::Other(format!("updater unavailable: {e}")))?;
+    let result = updater
+        .check()
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("update check failed: {e}")))?;
+    Ok(result.map(|update| UpdateInfo {
+        version: update.version.clone(),
+        notes: update.body.clone(),
+    }))
+}
+
+#[tauri::command]
+pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
+    let updater = app
+        .updater()
+        .map_err(|e| crate::error::AppError::Other(format!("updater unavailable: {e}")))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("update check failed: {e}")))?;
+    if let Some(update) = update {
+        update
+            .download_and_install(|_chunk, _total| {}, || {})
+            .await
+            .map_err(|e| crate::error::AppError::Other(format!("install failed: {e}")))?;
+        app.restart();
+    }
+    Ok(())
+}

@@ -92,6 +92,8 @@ fn main() {
             commands::set_config,
             commands::get_first_run,
             commands::clear_first_run,
+            commands::check_for_update,
+            commands::install_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Session, RecentProject, AppConfig } from "@/types";
+import type { Session, RecentProject, AppConfig, UpdateInfo } from "@/types";
 
 export async function listSessions(): Promise<Session[]> {
   return invoke<Session[]>("list_sessions");
@@ -48,4 +48,12 @@ export async function getFirstRun(): Promise<boolean> {
 
 export async function clearFirstRun(): Promise<void> {
   return invoke<void>("clear_first_run");
+}
+
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  return invoke<UpdateInfo | null>("check_for_update");
+}
+
+export async function installUpdate(): Promise<void> {
+  return invoke<void>("install_update");
 }

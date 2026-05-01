@@ -31,3 +31,8 @@ export interface AppConfig {
   hotkey: string;
   idle_threshold_seconds: number;
 }
+
+export interface UpdateInfo {
+  version: string;
+  notes: string | null;
+}
