@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 import type { Session } from "@/types";
 import { focusSession, killSession } from "@/lib/ipc";
 
@@ -10,6 +11,11 @@ function elapsed(startedAt: number): string {
   return `${m}m`;
 }
 
+function errMessage(e: unknown): string {
+  if (typeof e === "string") return e;
+  return (e as { message?: string })?.message ?? String(e);
+}
+
 export function SessionRow({
   session,
   onChange,
@@ -17,6 +23,7 @@ export function SessionRow({
   session: Session;
   onChange: () => void;
 }) {
+  const { toast } = useToast();
   const dot =
     session.status === "running"
       ? "bg-emerald-500"
@@ -29,16 +36,24 @@ export function SessionRow({
   async function focus() {
     try {
       await focusSession(session.id);
-    } catch {
-      /* toast in Plan 2 */
+    } catch (e: unknown) {
+      toast({
+        title: "Couldn't focus session",
+        description: errMessage(e),
+        variant: "destructive",
+      });
     }
     onChange();
   }
   async function kill() {
     try {
       await killSession(session.id);
-    } catch {
-      /* toast in Plan 2 */
+    } catch (e: unknown) {
+      toast({
+        title: "Couldn't kill session",
+        description: errMessage(e),
+        variant: "destructive",
+      });
     }
     onChange();
   }
@@ -50,6 +65,9 @@ export function SessionRow({
         <div className="font-semibold text-sm truncate">{projectName}</div>
         <div className="text-xs text-muted-foreground truncate">{session.project_dir}</div>
       </div>
+      {session.cost_usd > 0 && (
+        <div className="text-xs text-muted-foreground">${session.cost_usd.toFixed(2)}</div>
+      )}
       <div className="text-xs text-muted-foreground">{elapsed(session.started_at)}</div>
       <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-800">
         {session.model}

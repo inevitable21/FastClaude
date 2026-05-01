@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
 import { launchSession, recentProjects, getConfig } from "@/lib/ipc";
 import type { RecentProject, AppConfig } from "@/types";
 
@@ -28,6 +29,7 @@ export function LaunchDialog({
   onOpenChange: (v: boolean) => void;
   onLaunched: () => void;
 }) {
+  const { toast } = useToast();
   const [recents, setRecents] = useState<RecentProject[]>([]);
   const [cfg, setCfg] = useState<AppConfig | null>(null);
   const [projectDir, setProjectDir] = useState("");
@@ -61,6 +63,7 @@ export function LaunchDialog({
         model,
         prompt: prompt || undefined,
       });
+      toast({ title: "Session launched" });
       onLaunched();
       onOpenChange(false);
       setProjectDir("");
