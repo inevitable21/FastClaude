@@ -78,6 +78,9 @@ pub(crate) fn build_wt_argv(req: &SpawnRequest) -> Vec<String> {
         req.project_dir.clone(),
         "--title".into(),
         format!("FastClaude: {project_name}"),
+        // claude CLI emits its own ANSI title escape ("Claude Code") on
+        // startup that overwrites --title; this flag tells wt to ignore it.
+        "--suppressApplicationTitle".into(),
         "cmd.exe".into(),
         "/K".into(),
     ];
@@ -314,7 +317,8 @@ mod tests {
         // Global flags first, then per-tab flags, then the command.
         assert_eq!(&argv[0..4], &["-w", "new", "-d", "C:\\proj"]);
         assert_eq!(&argv[4..6], &["--title", "FastClaude: proj"]);
-        assert_eq!(&argv[6..8], &["cmd.exe", "/K"]);
+        assert_eq!(argv[6], "--suppressApplicationTitle");
+        assert_eq!(&argv[7..9], &["cmd.exe", "/K"]);
         assert!(argv.iter().any(|a| a.contains("claude")));
         assert!(argv.iter().any(|a| a.contains("--model")));
         assert!(argv.iter().any(|a| a == "claude-opus-4-7"));
