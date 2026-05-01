@@ -32,17 +32,11 @@ export default {
         "accordion-down": { from: { height: "0" }, to: { height: "var(--radix-accordion-content-height)" } },
         "accordion-up":   { from: { height: "var(--radix-accordion-content-height)" }, to: { height: "0" } },
         "row-in":         { from: { opacity: "0", transform: "translateY(6px)" }, to: { opacity: "1", transform: "none" } },
-        "dot-pulse":      {
-          "0%":   { boxShadow: "0 0 0 0 rgba(136,240,192,.55)" },
-          "70%":  { boxShadow: "0 0 0 10px rgba(136,240,192,0)" },
-          "100%": { boxShadow: "0 0 0 0 rgba(136,240,192,0)" },
-        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up":   "accordion-up 0.2s ease-out",
         "row-in":         "row-in 0.42s cubic-bezier(.2,.7,.2,1) both",
-        "dot-pulse":      "dot-pulse 2.4s ease-out infinite",
       },
     },
   },
