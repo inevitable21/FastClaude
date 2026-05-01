@@ -12,7 +12,7 @@ pub struct AppState {
     pub registry: Arc<Registry>,
     pub spawner: Box<dyn Spawner>,
     pub focus: Box<dyn WindowFocus>,
-    pub config: Mutex<Config>,
+    pub config: Arc<Mutex<Config>>,
 }
 
 #[derive(serde::Deserialize)]

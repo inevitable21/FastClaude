@@ -19,6 +19,7 @@ fn main() {
 
             let cfg_path = data_dir.join("config.json");
             let cfg = config::load(&cfg_path).expect("load config");
+            let cfg_arc = Arc::new(Mutex::new(cfg));
 
             let db_path = data_dir.join("state.db");
             let registry = Arc::new(Registry::open(&db_path).expect("open registry"));
@@ -29,19 +30,24 @@ fn main() {
                 registry: registry.clone(),
                 spawner: spawner::default_spawner(),
                 focus: window_focus::default_focus(),
-                config: Mutex::new(cfg),
+                config: cfg_arc.clone(),
             };
             app.manage(state);
 
             let app_handle = app.handle().clone();
             let registry_for_poller = registry.clone();
+            let cfg_for_poller = cfg_arc.clone();
             tauri::async_runtime::spawn(async move {
                 poller::run_loop(
                     registry_for_poller,
+                    cfg_for_poller,
                     std::time::Duration::from_secs(2),
                     move |report| {
                         if !report.ended_ids.is_empty() {
                             let _ = app_handle.emit("session-changed", &report.ended_ids);
+                        }
+                        if report.usage_changed {
+                            let _ = app_handle.emit("usage-updated", ());
                         }
                     },
                 )
