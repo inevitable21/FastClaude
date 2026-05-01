@@ -3,50 +3,144 @@
 @tailwind utilities;
 
 @layer base {
+  /* Light theme (fallback for bright environments — no aurora, no glass) */
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 47.4% 11.2%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 47.4% 11.2%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --ring: 215 20.2% 65.1%;
+    --background: #FDF8F4;
+    --foreground: #1A0F0C;
+    --muted: #F0E2D6;
+    --muted-foreground: #8A766A;
+    --popover: #FFFFFF;
+    --popover-foreground: #1A0F0C;
+    --card: #FFFFFF;
+    --card-foreground: #1A0F0C;
+    --border: #F0E2D6;
+    --border-strong: #E5CFBE;
+    --input: #F0E2D6;
+    --primary: #C46141;
+    --primary-foreground: #FDF8F4;
+    --primary-from: #C46141;
+    --primary-to: #C46141;
+    --secondary: #FAEFE6;
+    --secondary-foreground: #1A0F0C;
+    --accent: #D97757;
+    --accent-foreground: #FDF8F4;
+    --destructive: #B45A3C;
+    --destructive-foreground: #FDF8F4;
+    --ring: #D97757;
     --radius: 0.5rem;
+
+    --aurora-1: rgba(217, 119, 87, 0);
+    --aurora-2: rgba(180,  90, 60, 0);
+    --aurora-3: rgba(244, 181, 138, 0);
+
+    --status-running: #2F9E68;
+    --status-idle:    #B7791F;
+    --status-stopped: #6B7280;
   }
+
+  /* Dark theme — Warm Aurora */
   .dark {
-    --background: 224 71% 4%;
-    --foreground: 213 31% 91%;
-    --muted: 223 47% 11%;
-    --muted-foreground: 215.4 16.3% 56.9%;
-    --popover: 224 71% 4%;
-    --popover-foreground: 215 20.2% 65.1%;
-    --card: 224 71% 4%;
-    --card-foreground: 213 31% 91%;
-    --border: 216 34% 17%;
-    --input: 216 34% 17%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 1.2%;
-    --secondary: 222.2 47.4% 11.2%;
-    --secondary-foreground: 210 40% 98%;
-    --accent: 216 34% 17%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
-    --ring: 216 34% 17%;
+    --background: #0D0807;
+    --foreground: #FAEFE6;
+    --muted: #1A0F0C;
+    --muted-foreground: #C9B8AB;
+    --popover: #1A0F0C;
+    --popover-foreground: #FAEFE6;
+    --card: #1A0F0C;
+    --card-foreground: #FAEFE6;
+    --border: rgba(217, 119, 87, 0.18);
+    --border-strong: rgba(217, 119, 87, 0.32);
+    --input: rgba(255, 200, 170, 0.12);
+    --primary: #C46141;
+    --primary-foreground: #1A0F0C;
+    --primary-from: #E8825E;
+    --primary-to: #C46141;
+    --secondary: #1A0F0C;
+    --secondary-foreground: #FAEFE6;
+    --accent: #F4B58A;
+    --accent-foreground: #1A0F0C;
+    --destructive: #F87171;
+    --destructive-foreground: #1A0F0C;
+    --ring: #F4B58A;
+
+    --aurora-1: rgba(217, 119, 87, 0.40);
+    --aurora-2: rgba(180,  90, 60, 0.32);
+    --aurora-3: rgba(244, 181, 138, 0.18);
+
+    --status-running: #88F0C0;
+    --status-idle:    #FBBF24;
+    --status-stopped: #6B7280;
   }
 
   * { @apply border-border; }
-  body { @apply bg-background text-foreground; }
+  html, body { @apply bg-background text-foreground; }
+  body { font-family: theme('fontFamily.sans'); font-feature-settings: "ss01", "cv11"; }
+}
+
+/* Aurora layer — used by <AuroraBackground />.
+   Animated via gradient-position transform; @property declared so Firefox falls back gracefully. */
+@property --ax { syntax: '<percentage>'; inherits: false; initial-value: 12%; }
+@property --ay { syntax: '<percentage>'; inherits: false; initial-value: 8%; }
+@property --bx { syntax: '<percentage>'; inherits: false; initial-value: 88%; }
+@property --by { syntax: '<percentage>'; inherits: false; initial-value: 92%; }
+@property --cx { syntax: '<percentage>'; inherits: false; initial-value: 70%; }
+@property --cy { syntax: '<percentage>'; inherits: false; initial-value: 22%; }
+
+.aurora-layer {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(45% 60% at var(--ax) var(--ay), var(--aurora-1), transparent 60%),
+    radial-gradient(45% 60% at var(--bx) var(--by), var(--aurora-2), transparent 60%),
+    radial-gradient(35% 45% at var(--cx) var(--cy), var(--aurora-3), transparent 65%);
+  filter: blur(2px);
+  animation: aurora-drift 32s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift {
+  0%   { --ax: 12%; --ay:  8%; --bx: 88%; --by: 92%; --cx: 70%; --cy: 22%; }
+  50%  { --ax: 28%; --ay: 22%; --bx: 72%; --by: 78%; --cx: 60%; --cy: 38%; }
+  100% { --ax: 18%; --ay: 14%; --bx: 92%; --by: 86%; --cx: 80%; --cy: 18%; }
+}
+
+/* Status dot pulse uses the running color directly so it reads on both themes */
+.dot-running-glow {
+  animation: dot-pulse 2.4s ease-out infinite;
+}
+
+@keyframes dot-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--status-running); }
+  70%  { box-shadow: 0 0 0 10px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* Glass utility used by panels (rows, dialog, toast, banner, settings sections) */
+.glass-panel {
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(10px);
+}
+
+.glass-panel-strong {
+  background: color-mix(in oklab, var(--card) 85%, transparent);
+  border: 1px solid var(--border-strong);
+  backdrop-filter: blur(20px) saturate(140%);
+}
+
+/* In light theme, glass panels collapse to solid panels (no blur) */
+:root:not(.dark) .glass-panel,
+:root:not(.dark) .glass-panel-strong {
+  background: var(--card);
+  backdrop-filter: none;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .aurora-layer,
+  .dot-running-glow,
+  .animate-row-in {
+    animation: none !important;
+  }
 }
