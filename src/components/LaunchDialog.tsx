@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -52,6 +52,8 @@ export function LaunchDialog({
   const [preview, setPreview] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [recentIndex, setRecentIndex] = useState<number | null>(null);
+  const recentRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -91,8 +93,9 @@ export function LaunchDialog({
     };
   }, [open, projectDir, model, prompt, effort, permissionMode, extraArgs]);
 
-  async function submit() {
-    if (!projectDir.trim()) {
+  async function submit(overrideDir?: string) {
+    const dir = (overrideDir ?? projectDir).trim();
+    if (!dir) {
       setErr("Project folder required");
       return;
     }
@@ -100,7 +103,7 @@ export function LaunchDialog({
     setErr(null);
     try {
       await launchSession({
-        project_dir: projectDir.trim(),
+        project_dir: dir,
         model,
         prompt: prompt || undefined,
         effort,
@@ -112,10 +115,47 @@ export function LaunchDialog({
       onOpenChange(false);
       setProjectDir("");
       setPrompt("");
+      setRecentIndex(null);
     } catch (e: unknown) {
       setErr(typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function onProjectKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (recents.length > 0 && e.key === "ArrowDown") {
+      e.preventDefault();
+      setRecentIndex((i) => {
+        const next = i === null ? 0 : Math.min(i + 1, recents.length - 1);
+        recentRefs.current[next]?.scrollIntoView({ block: "nearest" });
+        return next;
+      });
+      return;
+    }
+    if (recents.length > 0 && e.key === "ArrowUp") {
+      e.preventDefault();
+      setRecentIndex((i) => {
+        const next = i === null ? recents.length - 1 : Math.max(i - 1, 0);
+        recentRefs.current[next]?.scrollIntoView({ block: "nearest" });
+        return next;
+      });
+      return;
+    }
+    if (e.key === "Escape" && recentIndex !== null) {
+      e.preventDefault();
+      setRecentIndex(null);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (recentIndex !== null && recents[recentIndex]) {
+        const dir = recents[recentIndex].decoded_path;
+        setProjectDir(dir);
+        submit(dir);
+      } else {
+        submit();
+      }
     }
   }
 
@@ -129,17 +169,30 @@ export function LaunchDialog({
           <div>
             <label className="text-xs font-medium">Project folder</label>
             <Input
+              autoFocus
               value={projectDir}
-              onChange={(e) => setProjectDir(e.target.value)}
+              onChange={(e) => {
+                setProjectDir(e.target.value);
+                setRecentIndex(null);
+              }}
+              onKeyDown={onProjectKeyDown}
               placeholder="C:/path/to/project"
             />
             {recents.length > 0 && (
               <div className="mt-2 max-h-40 overflow-auto border rounded">
-                {recents.map((r) => (
+                {recents.map((r, i) => (
                   <button
                     key={r.encoded_name}
-                    onClick={() => setProjectDir(r.decoded_path)}
-                    className="block w-full text-left px-2 py-1 text-xs hover:bg-accent"
+                    ref={(el) => {
+                      recentRefs.current[i] = el;
+                    }}
+                    onClick={() => {
+                      setProjectDir(r.decoded_path);
+                      setRecentIndex(i);
+                    }}
+                    className={`block w-full text-left px-2 py-1 text-xs hover:bg-accent ${
+                      recentIndex === i ? "bg-accent" : ""
+                    }`}
                   >
                     {r.decoded_path}
                   </button>
@@ -219,7 +272,7 @@ export function LaunchDialog({
             <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
               Cancel
             </Button>
-            <Button onClick={submit} disabled={busy}>
+            <Button onClick={() => submit()} disabled={busy}>
               {busy ? "Launching..." : "Launch"}
             </Button>
           </div>
