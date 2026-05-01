@@ -103,8 +103,16 @@ pub fn tick(
     Ok(report)
 }
 
-/// Find the newest JSONL file in `~/.claude/projects/<encoded>/` whose mtime
-/// is at or after the session's start_time (with a small slack).
+/// Find the JSONL file Claude created for THIS session — not any old file
+/// in the same project directory.
+///
+/// Claude creates a new `<session-uuid>.jsonl` file when each session starts.
+/// We identify ours by file CREATION time (not mtime): any file created BEFORE
+/// our session began belongs to a previous session. Picking by mtime was
+/// unreliable because an unrelated old file can get touched recently and win.
+///
+/// Allows 2s slack on the lower bound for clock skew between our wall-clock
+/// `started_at` and the file system's creation timestamp.
 fn find_jsonl_for(s: &Session) -> Option<PathBuf> {
     let root = recent_projects::default_claude_root().ok()?;
     let encoded = encode_project_dir(&s.project_dir);
@@ -117,16 +125,27 @@ fn find_jsonl_for(s: &Session) -> Option<PathBuf> {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
-        let Ok(mod_time) = meta.modified() else { continue };
-        let mtime = mod_time
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        if mtime + 5 < s.started_at {
+        let candidate_time = match meta.created() {
+            Ok(t) => t
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            // Some filesystems / older OSes don't expose creation time; fall back
+            // to mtime but apply the same strict filter — we want a file that
+            // came into existence after our session started.
+            Err(_) => match meta.modified() {
+                Ok(t) => t
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0),
+                Err(_) => continue,
+            },
+        };
+        if candidate_time + 2 < s.started_at {
             continue;
         }
-        if best.as_ref().map_or(true, |(_, t)| mtime > *t) {
-            best = Some((path, mtime));
+        if best.as_ref().map_or(true, |(_, t)| candidate_time > *t) {
+            best = Some((path, candidate_time));
         }
     }
     best.map(|(p, _)| p)
