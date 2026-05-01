@@ -1,4 +1,8 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+pub mod error;
+
+// Modules added incrementally per plan task. The Tauri-facing run() lives
+// here for now and is replaced by main.rs wiring in Task 11.
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
