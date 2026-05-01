@@ -51,10 +51,11 @@ export function Dashboard({
     <div className="text-foreground">
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background/55 backdrop-blur-xl">
         <div className="flex items-center gap-2.5 font-semibold tracking-tight">
-          <div
+          <img
+            src="/icon.png"
+            alt=""
             aria-hidden
-            className="h-[22px] w-[22px] rounded-md shadow-[0_0_12px_rgba(217,119,87,.4)]"
-            style={{ background: "linear-gradient(135deg,#E8825E,#C46141)" }}
+            className="h-[22px] w-[22px] rounded-md shadow-[0_0_12px_rgba(217,119,87,.4)] flex-shrink-0"
           />
           FastClaude
         </div>
