@@ -20,7 +20,7 @@ fn main() {
             std::fs::create_dir_all(&data_dir).ok();
 
             let cfg_path = data_dir.join("config.json");
-            let cfg = config::load(&cfg_path).expect("load config");
+            let (cfg, _was_created) = config::load(&cfg_path).expect("load config");
             let cfg_arc = Arc::new(Mutex::new(cfg));
 
             let db_path = data_dir.join("state.db");

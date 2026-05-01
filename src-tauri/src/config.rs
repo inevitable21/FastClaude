@@ -21,15 +21,15 @@ impl Default for Config {
     }
 }
 
-pub fn load(path: &PathBuf) -> AppResult<Config> {
+pub fn load(path: &PathBuf) -> AppResult<(Config, bool)> {
     if !path.exists() {
         let cfg = Config::default();
         save(path, &cfg)?;
-        return Ok(cfg);
+        return Ok((cfg, true));
     }
     let bytes = std::fs::read(path)?;
     let cfg: Config = serde_json::from_slice(&bytes)?;
-    Ok(cfg)
+    Ok((cfg, false))
 }
 
 pub fn save(path: &PathBuf, cfg: &Config) -> AppResult<()> {
@@ -48,12 +48,22 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn load_creates_default_when_missing() {
+    fn load_signals_first_run_when_creating_default() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("config.json");
-        let cfg = load(&path).unwrap();
+        let (cfg, was_created) = load(&path).unwrap();
         assert_eq!(cfg.default_model, "claude-opus-4-7");
+        assert!(was_created);
         assert!(path.exists(), "default config must be persisted");
+    }
+
+    #[test]
+    fn load_signals_not_first_run_when_file_exists() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        save(&path, &Config::default()).unwrap();
+        let (_cfg, was_created) = load(&path).unwrap();
+        assert!(!was_created);
     }
 
     #[test]
@@ -63,7 +73,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.default_model = "claude-sonnet-4-6".into();
         save(&path, &cfg).unwrap();
-        let loaded = load(&path).unwrap();
+        let (loaded, _) = load(&path).unwrap();
         assert_eq!(loaded.default_model, "claude-sonnet-4-6");
     }
 
@@ -86,7 +96,7 @@ mod tests {
                 "pricing":{"claude-opus-4-7":{"input":15,"output":75,"cache_read":1.5,"cache_write":18.75}}}"#,
         )
         .unwrap();
-        let cfg = load(&path).unwrap();
+        let (cfg, _) = load(&path).unwrap();
         assert_eq!(cfg.default_model, "claude-opus-4-7");
     }
 }
