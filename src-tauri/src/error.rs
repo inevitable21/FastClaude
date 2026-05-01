@@ -16,6 +16,10 @@ pub enum AppError {
     Spawn(String),
     #[error("focus failed: {0}")]
     Focus(String),
+    #[error("`claude` CLI not found on PATH. Install Claude Code from https://docs.claude.com/en/docs/claude-code/setup, then restart FastClaude.")]
+    ClaudeNotOnPath,
+    #[error("FastClaude doesn't yet support {0} — contributions welcome at https://github.com/inevitable21/FastClaude")]
+    PlatformUnsupported(&'static str),
     #[error("{0}")]
     Other(String),
 }

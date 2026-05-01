@@ -54,3 +54,43 @@ impl Spawner for StubSpawner {
         ))
     }
 }
+
+use std::path::PathBuf;
+
+/// Resolves an executable name on PATH. Behind a trait so the Windows
+/// spawner's PATH preflight (Task 6) can be unit-tested with a fake.
+pub trait PathLookup: Send + Sync {
+    fn find(&self, exe: &str) -> Option<PathBuf>;
+}
+
+pub struct EnvPathLookup;
+
+impl PathLookup for EnvPathLookup {
+    fn find(&self, exe: &str) -> Option<PathBuf> {
+        which::which(exe).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeLookup(Option<PathBuf>);
+    impl PathLookup for FakeLookup {
+        fn find(&self, _exe: &str) -> Option<PathBuf> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn fake_lookup_returns_some_when_present() {
+        let l = FakeLookup(Some(PathBuf::from("C:\\bin\\claude.exe")));
+        assert!(l.find("claude").is_some());
+    }
+
+    #[test]
+    fn fake_lookup_returns_none_when_absent() {
+        let l = FakeLookup(None);
+        assert!(l.find("claude").is_none());
+    }
+}
