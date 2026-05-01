@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use fastclaude_lib::{
     commands::{self, AppState},
@@ -13,6 +14,7 @@ use fastclaude_lib::{
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir).ok();
@@ -33,6 +35,24 @@ fn main() {
                 config: cfg_arc.clone(),
             };
             app.manage(state);
+
+            // Register the configured global hotkey. Failures are non-fatal —
+            // the hotkey just won't fire (e.g. invalid binding string).
+            let hotkey_str = cfg_arc.lock().unwrap().hotkey.clone();
+            let app_for_hk = app.handle().clone();
+            match hotkey_str.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                Ok(shortcut) => {
+                    let res = app.global_shortcut().on_shortcut(shortcut, move |_app, _sc, event| {
+                        if matches!(event.state(), ShortcutState::Pressed) {
+                            let _ = app_for_hk.emit("hotkey-fired", ());
+                        }
+                    });
+                    if let Err(e) = res {
+                        eprintln!("failed to register hotkey {hotkey_str}: {e}");
+                    }
+                }
+                Err(e) => eprintln!("invalid hotkey '{hotkey_str}' in config: {e}"),
+            }
 
             let app_handle = app.handle().clone();
             let registry_for_poller = registry.clone();
