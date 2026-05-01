@@ -40,10 +40,26 @@ const HOST_NAMES: &[&str] = &[
     "conhost.exe",
 ];
 
+/// Build the argv (after the executable) passed to Windows Terminal for a
+/// given spawn request. Pure function so we can unit-test argv shape — and
+/// so Task 4 can add a `--title` flag with TDD.
+pub(crate) fn build_wt_argv(req: &SpawnRequest) -> Vec<String> {
+    let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
+    let claude_args = shlex::split(&claude_cmd).unwrap_or_default();
+    let mut argv: Vec<String> = vec![
+        "-w".into(),
+        "new".into(),
+        "-d".into(),
+        req.project_dir.clone(),
+        "cmd.exe".into(),
+        "/K".into(),
+    ];
+    argv.extend(claude_args);
+    argv
+}
+
 impl Spawner for WindowsSpawner {
     fn spawn(&self, req: &SpawnRequest) -> AppResult<SpawnResult> {
-        let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
-        let claude_args: Vec<String> = shlex::split(&claude_cmd).unwrap_or_default();
         let choice = resolve_terminal(&req.terminal_program)?;
 
         let mut cmd = match &choice {
@@ -51,13 +67,11 @@ impl Spawner for WindowsSpawner {
                 // -w new forces a new top-level window so each session is its
                 // own HWND and Kill can close just this window.
                 let mut c = Command::new(path);
-                c.args(["-w", "new", "-d", &req.project_dir, "cmd.exe", "/K"]);
-                for tok in &claude_args {
-                    c.arg(tok);
-                }
+                c.args(build_wt_argv(req));
                 c
             }
             TerminalChoice::Cmd => {
+                let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
                 let inner = format!("start \"FastClaude\" cmd.exe /K {claude_cmd}");
                 let mut c = Command::new("cmd.exe");
                 c.args(["/C", &inner]);
@@ -66,10 +80,7 @@ impl Spawner for WindowsSpawner {
             }
             TerminalChoice::Custom(path) => {
                 let mut c = Command::new(path);
-                c.args(["-w", "new", "-d", &req.project_dir, "cmd.exe", "/K"]);
-                for tok in &claude_args {
-                    c.arg(tok);
-                }
+                c.args(build_wt_argv(req));
                 c
             }
         };
@@ -252,4 +263,37 @@ fn wait_for_new_host_window(pre: &HashSet<isize>, deadline: Duration) -> Option<
         std::thread::sleep(Duration::from_millis(150));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(project_dir: &str) -> SpawnRequest {
+        SpawnRequest {
+            project_dir: project_dir.into(),
+            model: "claude-opus-4-7".into(),
+            prompt: None,
+            terminal_program: "auto".into(),
+        }
+    }
+
+    #[test]
+    fn build_wt_argv_preserves_existing_shape() {
+        let argv = build_wt_argv(&req("C:\\proj"));
+        assert_eq!(&argv[0..6], &["-w", "new", "-d", "C:\\proj", "cmd.exe", "/K"]);
+        assert!(argv.iter().any(|a| a.contains("claude")), "claude command in argv");
+        assert!(argv.iter().any(|a| a.contains("--model")), "--model flag present");
+        assert!(argv.iter().any(|a| a == "claude-opus-4-7"), "model name as separate token");
+    }
+
+    #[test]
+    fn build_wt_argv_includes_prompt_when_set() {
+        let mut r = req("C:\\proj");
+        r.prompt = Some("hello world".into());
+        let argv = build_wt_argv(&r);
+        // shlex passes "hello world" as a single quoted token after splitting
+        let blob = argv.join(" ");
+        assert!(blob.contains("hello"), "prompt text in argv");
+    }
 }
