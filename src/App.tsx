@@ -46,7 +46,7 @@ export default function App() {
   return (
     <>
       <AuroraBackground />
-      <div className="min-h-screen flex flex-col bg-background text-foreground relative">
+      <div className="min-h-screen flex flex-col text-foreground relative z-10">
         {view !== "onboarding" && <UpdateBanner />}
         <div className="flex-1 flex flex-col">
           {view === "onboarding" ? (

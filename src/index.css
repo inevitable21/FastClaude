@@ -89,7 +89,7 @@
 .aurora-layer {
   position: fixed;
   inset: 0;
-  z-index: -1;
+  z-index: 0;
   pointer-events: none;
   background:
     radial-gradient(45% 60% at var(--ax) var(--ay), var(--aurora-1), transparent 60%),
