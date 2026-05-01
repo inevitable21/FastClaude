@@ -10,7 +10,24 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
 };
 
-pub struct WindowsSpawner;
+pub struct WindowsSpawner {
+    path_lookup: Box<dyn crate::spawner::PathLookup>,
+}
+
+impl WindowsSpawner {
+    pub fn new() -> Self {
+        Self { path_lookup: Box::new(crate::spawner::EnvPathLookup) }
+    }
+
+    #[cfg(test)]
+    pub fn with_lookup(lookup: Box<dyn crate::spawner::PathLookup>) -> Self {
+        Self { path_lookup: lookup }
+    }
+}
+
+impl Default for WindowsSpawner {
+    fn default() -> Self { Self::new() }
+}
 
 #[derive(Debug, Clone)]
 enum TerminalChoice {
@@ -67,6 +84,9 @@ pub(crate) fn build_wt_argv(req: &SpawnRequest) -> Vec<String> {
 
 impl Spawner for WindowsSpawner {
     fn spawn(&self, req: &SpawnRequest) -> AppResult<SpawnResult> {
+        if self.path_lookup.find("claude").is_none() {
+            return Err(AppError::ClaudeNotOnPath);
+        }
         let choice = resolve_terminal(&req.terminal_program)?;
 
         let mut cmd = match &choice {
@@ -326,5 +346,26 @@ mod tests {
         let argv = build_wt_argv(&req("C:\\"));
         let title_idx = argv.iter().position(|a| a == "--title").unwrap();
         assert_eq!(argv[title_idx + 1], "FastClaude: session");
+    }
+
+    #[test]
+    fn spawn_returns_claude_not_on_path_when_missing() {
+        use crate::spawner::PathLookup;
+        use std::path::PathBuf;
+
+        struct Missing;
+        impl PathLookup for Missing {
+            fn find(&self, _exe: &str) -> Option<PathBuf> { None }
+        }
+
+        let spawner = WindowsSpawner::with_lookup(Box::new(Missing));
+        let req = SpawnRequest {
+            project_dir: "C:\\proj".into(),
+            model: "claude-opus-4-7".into(),
+            prompt: None,
+            terminal_program: "wt".into(),
+        };
+        let err = spawner.spawn(&req).unwrap_err();
+        assert!(matches!(err, AppError::ClaudeNotOnPath), "expected ClaudeNotOnPath, got {err:?}");
     }
 }

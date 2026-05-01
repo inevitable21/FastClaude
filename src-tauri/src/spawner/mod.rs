@@ -31,7 +31,7 @@ pub trait Spawner: Send + Sync {
 pub fn default_spawner() -> Box<dyn Spawner> {
     #[cfg(target_os = "windows")]
     {
-        Box::new(windows::WindowsSpawner)
+        Box::new(windows::WindowsSpawner::new())
     }
     #[cfg(target_os = "macos")]
     {
