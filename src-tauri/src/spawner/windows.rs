@@ -44,9 +44,16 @@ const HOST_NAMES: &[&str] = &[
 /// given spawn request. Pure function so we can unit-test argv shape — and
 /// so Task 4 can add a `--title` flag with TDD.
 pub(crate) fn build_wt_argv(req: &SpawnRequest) -> Vec<String> {
+    let project_name = std::path::Path::new(&req.project_dir)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("session");
     let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
     let claude_args = shlex::split(&claude_cmd).unwrap_or_default();
     let mut argv: Vec<String> = vec![
+        "--title".into(),
+        format!("FastClaude: {project_name}"),
         "-w".into(),
         "new".into(),
         "-d".into(),
@@ -281,10 +288,12 @@ mod tests {
     #[test]
     fn build_wt_argv_preserves_existing_shape() {
         let argv = build_wt_argv(&req("C:\\proj"));
-        assert_eq!(&argv[0..6], &["-w", "new", "-d", "C:\\proj", "cmd.exe", "/K"]);
-        assert!(argv.iter().any(|a| a.contains("claude")), "claude command in argv");
-        assert!(argv.iter().any(|a| a.contains("--model")), "--model flag present");
-        assert!(argv.iter().any(|a| a == "claude-opus-4-7"), "model name as separate token");
+        // After the --title <label> prefix:
+        let core = &argv[2..];
+        assert_eq!(&core[0..6], &["-w", "new", "-d", "C:\\proj", "cmd.exe", "/K"]);
+        assert!(core.iter().any(|a| a.contains("claude")));
+        assert!(core.iter().any(|a| a.contains("--model")));
+        assert!(core.iter().any(|a| a == "claude-opus-4-7"));
     }
 
     #[test]
@@ -295,5 +304,27 @@ mod tests {
         // shlex passes "hello world" as a single quoted token after splitting
         let blob = argv.join(" ");
         assert!(blob.contains("hello"), "prompt text in argv");
+    }
+
+    #[test]
+    fn build_wt_argv_includes_title_with_project_basename() {
+        let argv = build_wt_argv(&req("C:\\GitProjects\\FastClaude"));
+        let title_idx = argv.iter().position(|a| a == "--title").expect("--title present");
+        assert_eq!(argv[title_idx + 1], "FastClaude: FastClaude");
+    }
+
+    #[test]
+    fn build_wt_argv_title_uses_basename_for_unix_style_paths() {
+        let argv = build_wt_argv(&req("/home/u/cool-project"));
+        let title_idx = argv.iter().position(|a| a == "--title").unwrap();
+        assert_eq!(argv[title_idx + 1], "FastClaude: cool-project");
+    }
+
+    #[test]
+    fn build_wt_argv_title_falls_back_when_basename_empty() {
+        // Trailing slash / drive root — basename returns None
+        let argv = build_wt_argv(&req("C:\\"));
+        let title_idx = argv.iter().position(|a| a == "--title").unwrap();
+        assert_eq!(argv[title_idx + 1], "FastClaude: session");
     }
 }
