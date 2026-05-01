@@ -54,10 +54,12 @@ export function LaunchDialog({
   const [err, setErr] = useState<string | null>(null);
   const [recentIndex, setRecentIndex] = useState<number | null>(null);
   const recentRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     setErr(null);
+    setRecentIndex(null);
     recentProjects(10).then(setRecents).catch(() => setRecents([]));
     getConfig()
       .then((c) => {
@@ -68,6 +70,15 @@ export function LaunchDialog({
         setExtraArgs(c.default_extra_args);
       })
       .catch(() => {});
+  }, [open]);
+
+  // Radix Dialog's internal focus trap claims focus on its own first
+  // focusable (often the close-X). Push focus back to the project input
+  // after the dialog mounts so arrow keys hit our onKeyDown handler.
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
   }, [open]);
 
   // Live preview — backend builds the exact command so the preview matches reality.
@@ -169,7 +180,7 @@ export function LaunchDialog({
           <div>
             <label className="text-xs font-medium">Project folder</label>
             <Input
-              autoFocus
+              ref={inputRef}
               value={projectDir}
               onChange={(e) => {
                 setProjectDir(e.target.value);
