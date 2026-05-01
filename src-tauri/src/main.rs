@@ -33,6 +33,7 @@ fn main() {
                 spawner: spawner::default_spawner(),
                 focus: window_focus::default_focus(),
                 config: cfg_arc.clone(),
+                config_path: cfg_path.clone(),
             };
             app.manage(state);
 
@@ -44,6 +45,11 @@ fn main() {
                 Ok(shortcut) => {
                     let res = app.global_shortcut().on_shortcut(shortcut, move |_app, _sc, event| {
                         if matches!(event.state(), ShortcutState::Pressed) {
+                            if let Some(w) = app_for_hk.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
                             let _ = app_for_hk.emit("hotkey-fired", ());
                         }
                     });
