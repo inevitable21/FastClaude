@@ -1,6 +1,6 @@
 use super::{SpawnRequest, SpawnResult, Spawner};
 use crate::error::{AppError, AppResult};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
@@ -54,6 +54,7 @@ impl Spawner for WindowsSpawner {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
+        let spawn_time = chrono::Utc::now().timestamp() as u64;
         let _child = cmd.spawn().map_err(|e| {
             AppError::Spawn(format!(
                 "failed to launch terminal ({choice:?}): {e}. \
@@ -63,7 +64,7 @@ impl Spawner for WindowsSpawner {
         })?;
         drop(_child);
 
-        let claude_pid = wait_for_claude(&req.project_dir, Duration::from_secs(5))?;
+        let claude_pid = wait_for_claude(&req.project_dir, spawn_time, Duration::from_secs(10))?;
         let terminal_pid = parent_pid_of(claude_pid).unwrap_or(claude_pid);
 
         Ok(SpawnResult {
@@ -113,33 +114,44 @@ fn build_claude_command(model: &str, prompt: Option<&str>) -> String {
     }
 }
 
-fn wait_for_claude(project_dir: &str, deadline: Duration) -> AppResult<u32> {
+/// Find the claude process spawned by our terminal launch.
+///
+/// sysinfo on Windows often can't read another process's `cwd` or full `cmd`
+/// for processes outside our session. So we use a more permissive strategy:
+/// look for any process started at or after `spawn_time` whose name, exe path,
+/// or cmd args mention "claude". If multiple match (the .cmd wrapper plus the
+/// underlying node.exe), prefer the leaf — but accept any match within window.
+///
+/// `project_dir` is currently used only for the error message; we no longer
+/// require cwd to match because that filter was too strict.
+fn wait_for_claude(project_dir: &str, spawn_time: u64, deadline: Duration) -> AppResult<u32> {
     let start = Instant::now();
-    let target = normalize_path(project_dir);
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
     while start.elapsed() < deadline {
         sys.refresh_processes();
-        // Find processes whose cwd matches and whose cmdline mentions "claude".
-        // Picks the most recently started match (the leaf node.exe, not the
-        // shell or terminal host that also share the cwd).
         let mut best: Option<(Pid, u64)> = None;
         for (pid, proc) in sys.processes() {
-            let Some(cwd) = proc.cwd() else { continue };
-            if normalize_path(cwd.to_string_lossy().as_ref()) != target {
+            // Allow 1s slack on the lower bound — process start_time is in seconds
+            // and ours can be a hair late.
+            if proc.start_time() + 1 < spawn_time {
                 continue;
             }
-            let mentions_claude = proc
-                .cmd()
-                .iter()
-                .any(|s| s.to_lowercase().contains("claude"))
-                || proc.name().to_lowercase().contains("claude");
+            let name = proc.name().to_lowercase();
+            let exe = proc
+                .exe()
+                .map(|p| p.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            let cmd_blob = proc.cmd().join(" ").to_lowercase();
+            let mentions_claude = name.contains("claude")
+                || exe.contains("claude")
+                || cmd_blob.contains("claude");
             if !mentions_claude {
                 continue;
             }
             let started = proc.start_time();
-            if best.map_or(true, |(_, t)| started > t) {
+            if best.map_or(true, |(_, t)| started >= t) {
                 best = Some((*pid, started));
             }
         }
@@ -149,16 +161,11 @@ fn wait_for_claude(project_dir: &str, deadline: Duration) -> AppResult<u32> {
         std::thread::sleep(Duration::from_millis(200));
     }
     Err(AppError::Spawn(format!(
-        "did not see claude process for {project_dir} within timeout"
+        "did not see claude process for {project_dir} within {}s. \
+         Open the terminal that just launched and confirm 'claude' actually started \
+         (it may have failed silently — check for an error message in that terminal).",
+        deadline.as_secs()
     )))
-}
-
-fn normalize_path(p: &str) -> String {
-    let s = Path::new(p)
-        .to_string_lossy()
-        .to_lowercase()
-        .replace('\\', "/");
-    s.trim_end_matches('/').to_string()
 }
 
 fn parent_pid_of(pid: u32) -> Option<u32> {
