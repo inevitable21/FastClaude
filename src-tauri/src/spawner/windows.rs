@@ -9,13 +9,24 @@ pub struct WindowsSpawner;
 
 #[derive(Debug, Clone)]
 enum TerminalChoice {
-    /// Windows Terminal — `wt.exe -d <dir> <cmd...>`
+    /// Windows Terminal — `wt.exe -d <dir> cmd.exe /K <cmd>`. The cmd /K shell
+    /// stays alive even if claude exits, so the user sees errors and we have a
+    /// stable shell PID to track.
     WindowsTerminal(PathBuf),
     /// cmd.exe fallback — `cmd.exe /C start cmd.exe /K <cmd>`, run with cwd set.
     Cmd,
-    /// Explicit user-supplied program — args are `<dir> <cmd...>` style.
+    /// Explicit user-supplied program — args are `<dir> cmd.exe /K <cmd>` style.
     Custom(PathBuf),
 }
+
+/// Process names we never want to track as a session — these are launchers,
+/// hosts, or the WindowsTerminal application itself, not the running shell.
+const BLOCKED_NAMES: &[&str] = &[
+    "wt.exe",
+    "windowsterminal.exe",
+    "openconsole.exe",
+    "conhost.exe",
+];
 
 impl Spawner for WindowsSpawner {
     fn spawn(&self, req: &SpawnRequest) -> AppResult<SpawnResult> {
@@ -25,16 +36,17 @@ impl Spawner for WindowsSpawner {
 
         let mut cmd = match &choice {
             TerminalChoice::WindowsTerminal(path) => {
+                // wt.exe -d <dir> cmd.exe /K claude --model X [prompt]
                 let mut c = Command::new(path);
-                c.args(["-d", &req.project_dir]);
+                c.args(["-d", &req.project_dir, "cmd.exe", "/K"]);
                 for tok in &claude_args {
                     c.arg(tok);
                 }
                 c
             }
             TerminalChoice::Cmd => {
-                // `start` opens a new window; `/K` keeps it open after claude exits
-                // so the user can read any errors. cwd is set on Command itself.
+                // `start` opens a new window; outer cmd.exe exits, inner one keeps
+                // the window alive via /K so user sees claude's errors.
                 let inner = format!("start \"FastClaude\" cmd.exe /K {claude_cmd}");
                 let mut c = Command::new("cmd.exe");
                 c.args(["/C", &inner]);
@@ -43,7 +55,7 @@ impl Spawner for WindowsSpawner {
             }
             TerminalChoice::Custom(path) => {
                 let mut c = Command::new(path);
-                c.args(["-d", &req.project_dir]);
+                c.args(["-d", &req.project_dir, "cmd.exe", "/K"]);
                 for tok in &claude_args {
                     c.arg(tok);
                 }
@@ -86,14 +98,15 @@ fn resolve_terminal(setting: &str) -> AppResult<TerminalChoice> {
 }
 
 fn find_wt_exe() -> Option<PathBuf> {
-    // App Execution Alias path — present on Windows 11 if Windows Terminal is installed.
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let alias = PathBuf::from(local).join("Microsoft").join("WindowsApps").join("wt.exe");
+        let alias = PathBuf::from(local)
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("wt.exe");
         if alias.exists() {
             return Some(alias);
         }
     }
-    // PATH lookup as a last resort.
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join("wt.exe");
@@ -114,16 +127,18 @@ fn build_claude_command(model: &str, prompt: Option<&str>) -> String {
     }
 }
 
-/// Find the claude process spawned by our terminal launch.
+/// Find the shell process that hosts our newly-launched claude session.
 ///
-/// sysinfo on Windows often can't read another process's `cwd` or full `cmd`
-/// for processes outside our session. So we use a more permissive strategy:
-/// look for any process started at or after `spawn_time` whose name, exe path,
-/// or cmd args mention "claude". If multiple match (the .cmd wrapper plus the
-/// underlying node.exe), prefer the leaf — but accept any match within window.
+/// Strategy: every candidate process must have started at or after `spawn_time`
+/// AND have its name/exe/cmdline mention "claude". We exclude known launcher
+/// and host names (wt.exe, openconsole, conhost, WindowsTerminal) because
+/// those are short-lived launchers (wt.exe) or shared hosts that don't represent
+/// the session. Among the remaining matches we pick the most recently started,
+/// which is reliably the leaf process.
 ///
-/// `project_dir` is currently used only for the error message; we no longer
-/// require cwd to match because that filter was too strict.
+/// `project_dir` is used only for the error message — sysinfo on Windows can't
+/// reliably read the cwd of processes outside our session, so cwd is no longer
+/// part of the filter.
 fn wait_for_claude(project_dir: &str, spawn_time: u64, deadline: Duration) -> AppResult<u32> {
     let start = Instant::now();
     let mut sys = System::new_with_specifics(
@@ -133,12 +148,13 @@ fn wait_for_claude(project_dir: &str, spawn_time: u64, deadline: Duration) -> Ap
         sys.refresh_processes();
         let mut best: Option<(Pid, u64)> = None;
         for (pid, proc) in sys.processes() {
-            // Allow 1s slack on the lower bound — process start_time is in seconds
-            // and ours can be a hair late.
             if proc.start_time() + 1 < spawn_time {
                 continue;
             }
             let name = proc.name().to_lowercase();
+            if BLOCKED_NAMES.iter().any(|b| name == *b) {
+                continue;
+            }
             let exe = proc
                 .exe()
                 .map(|p| p.to_string_lossy().to_lowercase())
@@ -162,8 +178,8 @@ fn wait_for_claude(project_dir: &str, spawn_time: u64, deadline: Duration) -> Ap
     }
     Err(AppError::Spawn(format!(
         "did not see claude process for {project_dir} within {}s. \
-         Open the terminal that just launched and confirm 'claude' actually started \
-         (it may have failed silently — check for an error message in that terminal).",
+         The terminal window should still be open — check it for an error \
+         message from claude (e.g. authentication, unknown model name).",
         deadline.as_secs()
     )))
 }
