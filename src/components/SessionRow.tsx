@@ -25,17 +25,21 @@ function errMessage(e: unknown): string {
 export function SessionRow({
   session,
   onChange,
+  index = 0,
 }: {
   session: Session;
   onChange: () => void;
+  index?: number;
 }) {
   const { toast } = useToast();
-  const dot =
+
+  const dotClass =
     session.status === "running"
-      ? "bg-emerald-500"
+      ? "bg-[var(--status-running)] dot-running-glow"
       : session.status === "idle"
-      ? "bg-amber-400"
-      : "bg-zinc-400";
+      ? "bg-[var(--status-idle)]"
+      : "bg-[var(--status-stopped)]";
+
   const projectName =
     session.project_dir.split(/[\\/]/).filter(Boolean).pop() ?? session.project_dir;
 
@@ -65,20 +69,25 @@ export function SessionRow({
   }
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border border-border p-3">
-      <div className={`h-2 w-2 rounded-full ${dot}`} />
+    <div
+      className="flex items-center gap-3 rounded-lg glass-panel p-3 transition-colors hover:border-border-strong animate-row-in"
+      style={{ animationDelay: `${index * 70}ms` }}
+    >
+      <div className={`h-2 w-2 rounded-full flex-shrink-0 ${dotClass}`} />
       <div className="flex-1 min-w-0">
         <div className="font-semibold text-sm truncate">{projectName}</div>
-        <div className="text-xs text-muted-foreground truncate">{session.project_dir}</div>
+        <div className="text-xs text-muted-foreground truncate font-mono">{session.project_dir}</div>
       </div>
       {session.tokens_out > 0 && (
-        <div className="text-xs text-muted-foreground">tokens: {fmtTokens(session.tokens_out)}</div>
+        <div className="text-xs text-muted-foreground font-mono">
+          tokens: {fmtTokens(session.tokens_out)}
+        </div>
       )}
-      <div className="text-xs text-muted-foreground">{elapsed(session.started_at)}</div>
-      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-800">
+      <div className="text-xs text-muted-foreground font-mono">{elapsed(session.started_at)}</div>
+      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-accent/35 text-accent bg-accent/10">
         {session.model}
       </span>
-      <Button size="sm" onClick={focus}>
+      <Button size="sm" variant="ghost" onClick={focus}>
         Focus
       </Button>
       <Button size="sm" variant="destructive" onClick={kill}>
