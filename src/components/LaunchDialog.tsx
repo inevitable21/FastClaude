@@ -56,6 +56,29 @@ export function LaunchDialog({
   const recentRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Mirror state into refs so the document keydown handler always reads
+  // the latest values, regardless of when its closure was created.
+  const stateRef = useRef({
+    recents,
+    recentIndex,
+    projectDir,
+    model,
+    prompt,
+    effort,
+    permissionMode,
+    extraArgs,
+  });
+  stateRef.current = {
+    recents,
+    recentIndex,
+    projectDir,
+    model,
+    prompt,
+    effort,
+    permissionMode,
+    extraArgs,
+  };
+
   useEffect(() => {
     if (!open) return;
     setErr(null);
@@ -127,35 +150,38 @@ export function LaunchDialog({
   }
 
   // Capture arrow / enter / esc at the document level while the dialog is
-  // open. Avoids the input-level handler being bypassed when focus lands
-  // anywhere else inside the dialog (Radix Select triggers, buttons, etc).
+  // open. Reads latest state via stateRef so a fast-typed ↓+Enter doesn't
+  // race against React's render cycle.
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      const inSelectPopup = !!target?.closest("[role='listbox']");
-      // If a Radix Select dropdown is open, let it handle its own keys.
-      if (inSelectPopup) return;
+      // If a Radix Select popup is open, let it handle its own keys.
+      if (target?.closest("[role='listbox']")) return;
 
-      if (recents.length > 0 && e.key === "ArrowDown") {
+      const s = stateRef.current;
+
+      if (s.recents.length > 0 && e.key === "ArrowDown") {
         e.preventDefault();
-        setRecentIndex((i) => {
-          const next = i === null ? 0 : Math.min(i + 1, recents.length - 1);
-          recentRefs.current[next]?.scrollIntoView({ block: "nearest" });
-          return next;
-        });
+        const next =
+          s.recentIndex === null
+            ? 0
+            : Math.min(s.recentIndex + 1, s.recents.length - 1);
+        recentRefs.current[next]?.scrollIntoView({ block: "nearest" });
+        setRecentIndex(next);
         return;
       }
-      if (recents.length > 0 && e.key === "ArrowUp") {
+      if (s.recents.length > 0 && e.key === "ArrowUp") {
         e.preventDefault();
-        setRecentIndex((i) => {
-          const next = i === null ? recents.length - 1 : Math.max(i - 1, 0);
-          recentRefs.current[next]?.scrollIntoView({ block: "nearest" });
-          return next;
-        });
+        const next =
+          s.recentIndex === null
+            ? s.recents.length - 1
+            : Math.max(s.recentIndex - 1, 0);
+        recentRefs.current[next]?.scrollIntoView({ block: "nearest" });
+        setRecentIndex(next);
         return;
       }
-      if (e.key === "Escape" && recentIndex !== null) {
+      if (e.key === "Escape" && s.recentIndex !== null) {
         // Eat the first Esc to clear the highlight; a second Esc still
         // closes the dialog (Radix handles that).
         e.preventDefault();
@@ -164,25 +190,22 @@ export function LaunchDialog({
         return;
       }
       if (e.key === "Enter") {
-        // Don't submit when the user is mid-typing in something multiline
-        // (none today, but defensive against future textarea fields).
-        if (target?.tagName === "TEXTAREA") return;
-        // Don't fight the Cancel/Launch buttons — they handle their own click.
-        if (target?.tagName === "BUTTON") return;
         e.preventDefault();
-        if (recentIndex !== null && recents[recentIndex]) {
-          const dir = recents[recentIndex].decoded_path;
-          setProjectDir(dir);
+        const picked =
+          s.recentIndex !== null ? s.recents[s.recentIndex]?.decoded_path : null;
+        const dir = (picked ?? s.projectDir).trim();
+        if (dir) {
+          if (picked) setProjectDir(picked);
           submit(dir);
         } else {
-          submit();
+          setErr("Project folder required");
         }
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, recents, recentIndex, projectDir, model, prompt, effort, permissionMode, extraArgs]);
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
