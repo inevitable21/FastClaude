@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod session_registry;
 
 // Modules added incrementally per plan task. The Tauri-facing run() lives
 // here for now and is replaced by main.rs wiring in Task 11.
