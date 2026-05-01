@@ -15,7 +15,17 @@ export default function App() {
 
   useEffect(() => {
     getFirstRun()
-      .then((isFirst) => setView(isFirst ? "onboarding" : "dashboard"))
+      .then((isFirst) => {
+        if (isFirst) {
+          setView("onboarding");
+        } else {
+          setView("dashboard");
+          // Default to opening Launch on startup so the user can pick a
+          // recent and hit Enter — matches the hotkey workflow without
+          // requiring them to click first.
+          setLaunchOpen(true);
+        }
+      })
       .catch(() => setView("dashboard"));
   }, []);
 
