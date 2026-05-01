@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { getConfig, setConfig, clearFirstRun } from "@/lib/ipc";
 import { MODELS } from "@/lib/models";
 import type { AppConfig } from "@/types";
+import { HotkeyCapture } from "./HotkeyCapture";
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const { toast } = useToast();
@@ -81,12 +82,14 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             </SelectContent>
           </Select>
         </label>
-        {field(
-          "Global hotkey",
-          draft.hotkey,
-          (v) => setDraft({ ...draft, hotkey: v }),
-          "Pressed from anywhere to open the launch dialog"
-        )}
+        <label className="block">
+          <div className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground mb-1.5">Global hotkey</div>
+          <HotkeyCapture
+            value={draft.hotkey}
+            onChange={(v) => setDraft({ ...draft, hotkey: v })}
+          />
+          <div className="text-xs text-muted-foreground mt-1.5">Pressed from anywhere to open the launch dialog</div>
+        </label>
         <div className="pt-2">
           <Button onClick={getStarted} className="w-full">Get started</Button>
         </div>

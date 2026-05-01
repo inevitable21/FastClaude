@@ -20,6 +20,7 @@ import {
   toUnset,
 } from "@/lib/launch-options";
 import type { AppConfig } from "@/types";
+import { HotkeyCapture } from "./HotkeyCapture";
 
 type Theme = "dark" | "light";
 
@@ -193,9 +194,9 @@ export function Settings({ onBack }: { onBack: () => void }) {
 
         <Section title="Hotkey">
           <Field label="Global hotkey">
-            <Input
+            <HotkeyCapture
               value={draft.hotkey}
-              onChange={(e) => setDraft({ ...draft, hotkey: e.target.value })}
+              onChange={(v) => setDraft({ ...draft, hotkey: v })}
             />
           </Field>
           <Field label="Idle threshold (seconds)">
