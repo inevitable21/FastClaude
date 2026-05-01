@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { launchSession, listAllSessions, onSessionChanged } from "@/lib/ipc";
@@ -71,19 +72,23 @@ export function History({ onBack }: { onBack: () => void }) {
       });
       toast({ title: "Session resumed" });
     } catch (e: unknown) {
-      const msg =
-        typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e);
+      const msg = typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e);
       toast({ title: "Couldn't resume", description: msg, variant: "destructive" });
     }
   }
 
   return (
-    <div className="bg-background text-foreground">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-        <button onClick={onBack} className="text-sm hover:underline">
-          ← Back
+    <div className="text-foreground">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background/55 backdrop-blur-xl">
+        <button
+          onClick={onBack}
+          aria-label="Back"
+          title="Back"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
+        >
+          <ArrowLeft className="h-4 w-4" />
         </button>
-        <div className="font-semibold">History</div>
+        <div className="font-semibold tracking-tight">History</div>
       </div>
       <div className="p-4 min-h-[60vh]">
         {sessions === null ? (
@@ -94,39 +99,40 @@ export function History({ onBack }: { onBack: () => void }) {
           </div>
         ) : (
           <div className="space-y-2">
-            <div className="text-xs text-muted-foreground mb-2">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-3">
               Showing last {sessions.length} ended session{sessions.length === 1 ? "" : "s"}
             </div>
-            {sessions.map((s) => {
+            {sessions.map((s, i) => {
               const projectName =
                 s.project_dir.split(/[\\/]/).filter(Boolean).pop() ?? s.project_dir;
               return (
                 <div
                   key={s.id}
-                  className="flex items-center gap-3 rounded-lg border border-border p-3"
+                  className="flex items-center gap-3 rounded-lg glass-panel p-3 animate-row-in"
+                  style={{ animationDelay: `${i * 70}ms` }}
                 >
-                  <div className="h-2 w-2 rounded-full bg-zinc-400" />
+                  <div aria-hidden className="h-2 w-2 rounded-full bg-[var(--status-stopped)] flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold text-sm truncate">{projectName}</div>
-                    <div className="text-xs text-muted-foreground truncate">
+                    <div className="text-xs text-muted-foreground truncate font-mono">
                       {s.project_dir}
                     </div>
                   </div>
                   {s.tokens_out > 0 && (
-                    <div className="text-xs text-muted-foreground">
+                    <div className="text-xs text-muted-foreground font-mono">
                       tokens: {fmtTokens(s.tokens_out)}
                     </div>
                   )}
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-xs text-muted-foreground font-mono">
                     {duration(s.started_at, s.ended_at)}
                   </div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="text-xs text-muted-foreground font-mono">
                     {s.ended_at ? relativeTime(s.ended_at) : ""}
                   </div>
-                  <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-800">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-accent/35 text-accent bg-accent/10">
                     {s.model}
                   </span>
-                  <Button size="sm" onClick={() => resume(s)}>
+                  <Button size="sm" variant="ghost" onClick={() => resume(s)}>
                     {s.jsonl_path ? "Resume" : "Re-launch"}
                   </Button>
                 </div>
