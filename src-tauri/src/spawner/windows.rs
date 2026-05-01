@@ -1,7 +1,7 @@
 use super::{SpawnRequest, SpawnResult, Spawner};
 use crate::error::{AppError, AppResult};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
@@ -57,21 +57,23 @@ const HOST_NAMES: &[&str] = &[
     "conhost.exe",
 ];
 
-/// Build the argv (after the executable) passed to Windows Terminal for a
-/// given spawn request. Pure function so we can unit-test argv shape.
+/// Build the argv (after the executable) passed to Windows Terminal.
+///
+/// `command` is what cmd.exe runs after `/K` — typically the path to a
+/// per-launch wrapper .bat file (see `write_launcher_bat`) which redirects
+/// claude's stderr so we can surface real error messages instead of a
+/// generic timeout when claude exits early (bad model, auth failure, etc.).
 ///
 /// Argv order matters for wt: global flags (`-w`) come first, then per-tab
 /// flags (`-d`, `--title`), then the command. Putting `--title` ahead of
 /// `-w new` makes wt drop the rest and the spawned cmd never runs.
-pub(crate) fn build_wt_argv(req: &SpawnRequest) -> Vec<String> {
+pub(crate) fn build_wt_argv(req: &SpawnRequest, command: &str) -> Vec<String> {
     let project_name = std::path::Path::new(&req.project_dir)
         .file_name()
         .and_then(|s| s.to_str())
         .filter(|s| !s.is_empty())
         .unwrap_or("session");
-    let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
-    let claude_args = shlex::split(&claude_cmd).unwrap_or_default();
-    let mut argv: Vec<String> = vec![
+    vec![
         "-w".into(),
         "new".into(),
         "-d".into(),
@@ -83,9 +85,22 @@ pub(crate) fn build_wt_argv(req: &SpawnRequest) -> Vec<String> {
         "--suppressApplicationTitle".into(),
         "cmd.exe".into(),
         "/K".into(),
-    ];
-    argv.extend(claude_args);
-    argv
+        command.into(),
+    ]
+}
+
+/// Write a per-launch wrapper batch file that runs claude with stderr
+/// redirected to `err_path`. Lets `wait_for_claude` surface claude's actual
+/// failure message in the toast when the process exits early.
+fn write_launcher_bat(bat_path: &Path, err_path: &Path, req: &SpawnRequest) -> AppResult<()> {
+    let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
+    let content = format!(
+        "@echo off\r\n{} 2> \"{}\"\r\n",
+        claude_cmd,
+        err_path.display()
+    );
+    std::fs::write(bat_path, content)?;
+    Ok(())
 }
 
 impl Spawner for WindowsSpawner {
@@ -95,17 +110,26 @@ impl Spawner for WindowsSpawner {
         }
         let choice = resolve_terminal(&req.terminal_program)?;
 
+        // Per-launch wrapper bat + err file under %TEMP%. The bat invokes
+        // claude with `2> "<err>"` so wait_for_claude can surface claude's
+        // own error message if it exits early.
+        let launch_id = uuid::Uuid::new_v4();
+        let temp = std::env::temp_dir();
+        let bat_path = temp.join(format!("fastclaude-{launch_id}.bat"));
+        let err_path = temp.join(format!("fastclaude-{launch_id}.err"));
+        write_launcher_bat(&bat_path, &err_path, req)?;
+        let bat_str = bat_path.to_string_lossy().to_string();
+
         let mut cmd = match &choice {
             TerminalChoice::WindowsTerminal(path) => {
                 // -w new forces a new top-level window so each session is its
                 // own HWND and Kill can close just this window.
                 let mut c = Command::new(path);
-                c.args(build_wt_argv(req));
+                c.args(build_wt_argv(req, &bat_str));
                 c
             }
             TerminalChoice::Cmd => {
-                let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
-                let inner = format!("start \"FastClaude\" cmd.exe /K {claude_cmd}");
+                let inner = format!("start \"FastClaude\" cmd.exe /K \"{bat_str}\"");
                 let mut c = Command::new("cmd.exe");
                 c.args(["/C", &inner]);
                 c.current_dir(&req.project_dir);
@@ -113,7 +137,7 @@ impl Spawner for WindowsSpawner {
             }
             TerminalChoice::Custom(path) => {
                 let mut c = Command::new(path);
-                c.args(build_wt_argv(req));
+                c.args(build_wt_argv(req, &bat_str));
                 c
             }
         };
@@ -127,6 +151,7 @@ impl Spawner for WindowsSpawner {
 
         let spawn_time = chrono::Utc::now().timestamp() as u64;
         let _child = cmd.spawn().map_err(|e| {
+            let _ = std::fs::remove_file(&bat_path);
             AppError::Spawn(format!(
                 "failed to launch terminal ({choice:?}): {e}. \
                  Tip: install Windows Terminal from the Microsoft Store, or set \
@@ -135,11 +160,28 @@ impl Spawner for WindowsSpawner {
         })?;
         drop(_child);
 
-        let claude_pid = wait_for_claude(&req.project_dir, spawn_time, Duration::from_secs(10))?;
+        let claude_pid = match wait_for_claude(
+            &req.project_dir,
+            spawn_time,
+            Duration::from_secs(10),
+            &err_path,
+        ) {
+            Ok(pid) => pid,
+            Err(e) => {
+                let _ = std::fs::remove_file(&bat_path);
+                let _ = std::fs::remove_file(&err_path);
+                return Err(e);
+            }
+        };
         let terminal_pid = parent_pid_of(claude_pid).unwrap_or(claude_pid);
 
         // Wait briefly for the new window to appear and grab its HWND.
         let new_hwnd = wait_for_new_host_window(&pre_hwnds, Duration::from_secs(3));
+
+        // Bat already executed (cmd /K kept the shell open after the bat
+        // returned). Safe to delete now. The err file stays — claude's
+        // session may still write to it.
+        let _ = std::fs::remove_file(&bat_path);
 
         Ok(SpawnResult {
             claude_pid: claude_pid as i64,
@@ -189,7 +231,12 @@ fn build_claude_command(model: &str, prompt: Option<&str>) -> String {
     }
 }
 
-fn wait_for_claude(project_dir: &str, spawn_time: u64, deadline: Duration) -> AppResult<u32> {
+fn wait_for_claude(
+    project_dir: &str,
+    spawn_time: u64,
+    deadline: Duration,
+    err_path: &Path,
+) -> AppResult<u32> {
     let start = Instant::now();
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
@@ -224,14 +271,32 @@ fn wait_for_claude(project_dir: &str, spawn_time: u64, deadline: Duration) -> Ap
         if let Some((pid, _)) = best {
             return Ok(pid.as_u32());
         }
+        // Did claude exit before we could see it? If anything's in the
+        // stderr capture file, treat that as the real failure cause —
+        // bad model, auth error, missing dep, etc. — and surface it
+        // immediately instead of waiting out the full timeout.
+        if let Some(msg) = read_error_capture(err_path) {
+            return Err(AppError::Spawn(format!("claude exited: {msg}")));
+        }
         std::thread::sleep(Duration::from_millis(200));
     }
+    let suffix = read_error_capture(err_path)
+        .map(|s| format!(" claude wrote: {s}"))
+        .unwrap_or_default();
     Err(AppError::Spawn(format!(
-        "did not see claude process for {project_dir} within {}s. \
-         The terminal window should still be open — check it for an error \
-         message from claude (e.g. authentication, unknown model name).",
+        "did not see claude process for {project_dir} within {}s.{suffix}",
         deadline.as_secs()
     )))
+}
+
+fn read_error_capture(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn parent_pid_of(pid: u32) -> Option<u32> {
@@ -311,39 +376,35 @@ mod tests {
         }
     }
 
+    const CMD: &str = "C:\\Temp\\fastclaude-test.bat";
+
     #[test]
     fn build_wt_argv_preserves_existing_shape() {
-        let argv = build_wt_argv(&req("C:\\proj"));
+        let argv = build_wt_argv(&req("C:\\proj"), CMD);
         // Global flags first, then per-tab flags, then the command.
         assert_eq!(&argv[0..4], &["-w", "new", "-d", "C:\\proj"]);
         assert_eq!(&argv[4..6], &["--title", "FastClaude: proj"]);
         assert_eq!(argv[6], "--suppressApplicationTitle");
         assert_eq!(&argv[7..9], &["cmd.exe", "/K"]);
-        assert!(argv.iter().any(|a| a.contains("claude")));
-        assert!(argv.iter().any(|a| a.contains("--model")));
-        assert!(argv.iter().any(|a| a == "claude-opus-4-7"));
+        assert_eq!(argv[9], CMD, "wrapper bat path is the /K command");
     }
 
     #[test]
-    fn build_wt_argv_includes_prompt_when_set() {
-        let mut r = req("C:\\proj");
-        r.prompt = Some("hello world".into());
-        let argv = build_wt_argv(&r);
-        // shlex passes "hello world" as a single quoted token after splitting
-        let blob = argv.join(" ");
-        assert!(blob.contains("hello"), "prompt text in argv");
+    fn build_wt_argv_passes_command_through_unchanged() {
+        let argv = build_wt_argv(&req("C:\\proj"), "C:\\Other Path\\with spaces.bat");
+        assert_eq!(argv.last().unwrap(), "C:\\Other Path\\with spaces.bat");
     }
 
     #[test]
     fn build_wt_argv_includes_title_with_project_basename() {
-        let argv = build_wt_argv(&req("C:\\GitProjects\\FastClaude"));
+        let argv = build_wt_argv(&req("C:\\GitProjects\\FastClaude"), CMD);
         let title_idx = argv.iter().position(|a| a == "--title").expect("--title present");
         assert_eq!(argv[title_idx + 1], "FastClaude: FastClaude");
     }
 
     #[test]
     fn build_wt_argv_title_uses_basename_for_unix_style_paths() {
-        let argv = build_wt_argv(&req("/home/u/cool-project"));
+        let argv = build_wt_argv(&req("/home/u/cool-project"), CMD);
         let title_idx = argv.iter().position(|a| a == "--title").unwrap();
         assert_eq!(argv[title_idx + 1], "FastClaude: cool-project");
     }
@@ -351,9 +412,42 @@ mod tests {
     #[test]
     fn build_wt_argv_title_falls_back_when_basename_empty() {
         // Trailing slash / drive root — basename returns None
-        let argv = build_wt_argv(&req("C:\\"));
+        let argv = build_wt_argv(&req("C:\\"), CMD);
         let title_idx = argv.iter().position(|a| a == "--title").unwrap();
         assert_eq!(argv[title_idx + 1], "FastClaude: session");
+    }
+
+    #[test]
+    fn write_launcher_bat_redirects_stderr() {
+        let dir = tempfile::tempdir().unwrap();
+        let bat = dir.path().join("test.bat");
+        let err = dir.path().join("test.err");
+        write_launcher_bat(&bat, &err, &req("C:\\proj")).unwrap();
+        let content = std::fs::read_to_string(&bat).unwrap();
+        assert!(content.contains("@echo off"), "starts with @echo off");
+        assert!(content.contains("claude --model claude-opus-4-7"), "runs claude");
+        assert!(
+            content.contains(&format!("2> \"{}\"", err.display())),
+            "redirects stderr to err file: {content}"
+        );
+    }
+
+    #[test]
+    fn read_error_capture_returns_some_when_file_has_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("e.err");
+        std::fs::write(&path, "  error: bad model\n\n").unwrap();
+        assert_eq!(read_error_capture(&path).as_deref(), Some("error: bad model"));
+    }
+
+    #[test]
+    fn read_error_capture_returns_none_for_missing_or_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.err");
+        assert!(read_error_capture(&missing).is_none());
+        let empty = dir.path().join("empty.err");
+        std::fs::write(&empty, "   \n  \n").unwrap();
+        assert!(read_error_capture(&empty).is_none());
     }
 
     #[test]
