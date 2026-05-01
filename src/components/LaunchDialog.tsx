@@ -223,7 +223,7 @@ export function LaunchDialog({
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <label className="text-xs font-medium">Project folder</label>
+            <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">Project folder</label>
             <Input
               ref={inputRef}
               value={projectDir}
@@ -234,7 +234,7 @@ export function LaunchDialog({
               placeholder="C:/path/to/project"
             />
             {recents.length > 0 && (
-              <div className="mt-2 max-h-40 overflow-auto border rounded">
+              <div className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-black/20">
                 {recents.map((r, i) => (
                   <button
                     key={r.encoded_name}
@@ -245,10 +245,10 @@ export function LaunchDialog({
                       setProjectDir(r.decoded_path);
                       setRecentIndex(i);
                     }}
-                    className={`block w-full text-left px-2 py-1 text-xs hover:bg-accent ${
+                    className={`block w-full text-left px-2 py-1 text-xs font-mono transition-colors hover:bg-foreground/[0.06] ${
                       recentIndex === i
-                        ? "bg-primary text-primary-foreground"
-                        : ""
+                        ? "bg-gradient-to-r from-[rgba(217,119,87,.25)] to-[rgba(217,119,87,.10)] text-foreground border-l-2 border-accent pl-[6px]"
+                        : "border-l-2 border-transparent"
                     }`}
                   >
                     {r.decoded_path}
@@ -258,7 +258,7 @@ export function LaunchDialog({
             )}
           </div>
           <div>
-            <label className="text-xs font-medium">Model</label>
+            <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">Model</label>
             <Select value={model} onValueChange={setModel}>
               <SelectTrigger>
                 <SelectValue />
@@ -272,7 +272,7 @@ export function LaunchDialog({
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-xs font-medium">--effort</label>
+              <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">--effort</label>
               <Select value={toUnset(effort)} onValueChange={(v) => setEffort(fromUnset(v))}>
                 <SelectTrigger>
                   <SelectValue />
@@ -286,7 +286,7 @@ export function LaunchDialog({
               </Select>
             </div>
             <div>
-              <label className="text-xs font-medium">--permission-mode</label>
+              <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">--permission-mode</label>
               <Select
                 value={toUnset(permissionMode)}
                 onValueChange={(v) => setPermissionMode(fromUnset(v))}
@@ -304,7 +304,7 @@ export function LaunchDialog({
             </div>
           </div>
           <div>
-            <label className="text-xs font-medium">Extra args</label>
+            <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">Extra args</label>
             <Input
               value={extraArgs}
               onChange={(e) => setExtraArgs(e.target.value)}
@@ -312,16 +312,17 @@ export function LaunchDialog({
             />
           </div>
           <div>
-            <label className="text-xs font-medium">Starting prompt (optional)</label>
+            <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">Starting prompt (optional)</label>
             <Input
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="Implement X..."
+              className="font-sans"
             />
           </div>
           {preview && (
-            <div className="text-[11px] font-mono bg-muted/50 border border-border rounded p-2 break-all">
-              <span className="text-muted-foreground">Will run:</span> {preview}
+            <div className="text-[11px] font-mono bg-black/30 border border-border rounded-md p-2 break-all">
+              <span className="text-accent">Will run:</span> {preview}
             </div>
           )}
           {err && <div className="text-xs text-destructive">{err}</div>}
@@ -334,7 +335,7 @@ export function LaunchDialog({
             </Button>
           </div>
           {cfg && (
-            <div className="text-[10px] text-muted-foreground">
+            <div className="text-[10px] font-mono text-muted-foreground">
               terminal: {cfg.terminal_program}
             </div>
           )}
