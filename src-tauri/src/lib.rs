@@ -4,6 +4,7 @@ pub mod poller;
 pub mod recent_projects;
 pub mod session_registry;
 pub mod spawner;
+pub mod window_focus;
 
 // Modules added incrementally per plan task. The Tauri-facing run() lives
 // here for now and is replaced by main.rs wiring in Task 11.
