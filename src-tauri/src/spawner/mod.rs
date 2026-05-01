@@ -15,6 +15,10 @@ pub struct SpawnRequest {
     pub prompt: Option<String>,
     /// "auto" or an explicit terminal program name/path.
     pub terminal_program: String,
+    /// If set, append `--resume <id>` so claude reattaches to that
+    /// existing JSONL conversation instead of starting fresh.
+    #[serde(default)]
+    pub resume: Option<String>,
 }
 
 #[derive(Debug, Clone)]

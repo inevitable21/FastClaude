@@ -56,14 +56,24 @@ export function History({ onBack }: { onBack: () => void }) {
     return () => unlisten?.();
   }, [refresh]);
 
-  async function relaunch(s: Session) {
+  function claudeSessionId(jsonlPath: string | null): string | undefined {
+    if (!jsonlPath) return undefined;
+    const base = jsonlPath.split(/[\\/]/).pop() ?? "";
+    return base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : undefined;
+  }
+
+  async function resume(s: Session) {
     try {
-      await launchSession({ project_dir: s.project_dir, model: s.model });
-      toast({ title: "Session launched" });
+      await launchSession({
+        project_dir: s.project_dir,
+        model: s.model,
+        resume: claudeSessionId(s.jsonl_path),
+      });
+      toast({ title: "Session resumed" });
     } catch (e: unknown) {
       const msg =
         typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e);
-      toast({ title: "Couldn't relaunch", description: msg, variant: "destructive" });
+      toast({ title: "Couldn't resume", description: msg, variant: "destructive" });
     }
   }
 
@@ -116,8 +126,8 @@ export function History({ onBack }: { onBack: () => void }) {
                   <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-800">
                     {s.model}
                   </span>
-                  <Button size="sm" onClick={() => relaunch(s)}>
-                    Re-launch
+                  <Button size="sm" onClick={() => resume(s)}>
+                    {s.jsonl_path ? "Resume" : "Re-launch"}
                   </Button>
                 </div>
               );

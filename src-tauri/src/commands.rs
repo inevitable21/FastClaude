@@ -24,6 +24,10 @@ pub struct LaunchInput {
     pub project_dir: String,
     pub model: Option<String>,
     pub prompt: Option<String>,
+    /// If set, append `--resume <id>` so claude reattaches to that
+    /// existing JSONL conversation instead of starting fresh.
+    #[serde(default)]
+    pub resume: Option<String>,
 }
 
 #[tauri::command]
@@ -49,6 +53,7 @@ pub fn launch_session(
         model: model.clone(),
         prompt: input.prompt,
         terminal_program: cfg.terminal_program.clone(),
+        resume: input.resume,
     };
     let result = state.spawner.spawn(&req)?;
     let session = state.registry.insert(NewSession {

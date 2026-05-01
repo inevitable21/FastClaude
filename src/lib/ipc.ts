@@ -14,6 +14,7 @@ export async function launchSession(input: {
   project_dir: string;
   model?: string;
   prompt?: string;
+  resume?: string;
 }): Promise<Session> {
   return invoke<Session>("launch_session", { input });
 }

@@ -93,7 +93,7 @@ pub(crate) fn build_wt_argv(req: &SpawnRequest, command: &str) -> Vec<String> {
 /// redirected to `err_path`. Lets `wait_for_claude` surface claude's actual
 /// failure message in the toast when the process exits early.
 fn write_launcher_bat(bat_path: &Path, err_path: &Path, req: &SpawnRequest) -> AppResult<()> {
-    let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
+    let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref(), req.resume.as_deref());
     let content = format!(
         "@echo off\r\n{} 2> \"{}\"\r\n",
         claude_cmd,
@@ -222,13 +222,15 @@ fn find_wt_exe() -> Option<PathBuf> {
     None
 }
 
-fn build_claude_command(model: &str, prompt: Option<&str>) -> String {
-    match prompt {
-        Some(p) if !p.is_empty() => {
-            format!("claude --model {model} {}", shell_escape::escape(p.into()))
-        }
-        _ => format!("claude --model {model}"),
+fn build_claude_command(model: &str, prompt: Option<&str>, resume: Option<&str>) -> String {
+    let mut cmd = format!("claude --model {model}");
+    if let Some(id) = resume.filter(|s| !s.is_empty()) {
+        cmd.push_str(&format!(" --resume {}", shell_escape::escape(id.into())));
     }
+    if let Some(p) = prompt.filter(|s| !s.is_empty()) {
+        cmd.push_str(&format!(" {}", shell_escape::escape(p.into())));
+    }
+    cmd
 }
 
 fn wait_for_claude(
@@ -373,6 +375,7 @@ mod tests {
             model: "claude-opus-4-7".into(),
             prompt: None,
             terminal_program: "auto".into(),
+            resume: None,
         }
     }
 
@@ -466,6 +469,7 @@ mod tests {
             model: "claude-opus-4-7".into(),
             prompt: None,
             terminal_program: "wt".into(),
+            resume: None,
         };
         let err = spawner.spawn(&req).unwrap_err();
         assert!(matches!(err, AppError::ClaudeNotOnPath), "expected ClaudeNotOnPath, got {err:?}");
