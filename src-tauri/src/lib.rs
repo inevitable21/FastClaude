@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod config;
+pub mod cost_reader;
 pub mod error;
 pub mod poller;
 pub mod recent_projects;
