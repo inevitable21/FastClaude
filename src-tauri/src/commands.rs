@@ -1,7 +1,7 @@
-use crate::config::Config;
-use crate::error::AppResult;
+use crate::config::{self, Config};
+use crate::error::{AppError, AppResult};
 use crate::recent_projects::{self, RecentProject};
-use crate::session_registry::{NewSession, Registry, Session};
+use crate::session_registry::{NewSession, Registry, Session, UsageSummary};
 use crate::spawner::{SpawnRequest, Spawner};
 use crate::window_focus::WindowFocus;
 use std::sync::{Arc, Mutex};
@@ -156,4 +156,23 @@ pub fn recent_projects(limit: usize) -> AppResult<Vec<RecentProject>> {
 #[tauri::command]
 pub fn get_config(state: State<'_, AppState>) -> AppResult<Config> {
     Ok(state.config.lock().unwrap().clone())
+}
+
+#[tauri::command]
+pub fn get_usage_summary(state: State<'_, AppState>, since: i64) -> AppResult<UsageSummary> {
+    state.registry.usage_since(since)
+}
+
+#[tauri::command]
+pub fn set_config(state: State<'_, AppState>, cfg: Config) -> AppResult<()> {
+    {
+        let mut held = state.config.lock().unwrap();
+        *held = cfg.clone();
+    }
+    let dir = dirs::config_dir()
+        .ok_or_else(|| AppError::Other("no config dir".into()))?
+        .join("FastClaude");
+    std::fs::create_dir_all(&dir)?;
+    config::save(&dir.join("config.json"), &cfg)?;
+    Ok(())
 }

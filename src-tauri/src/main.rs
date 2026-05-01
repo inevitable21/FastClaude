@@ -63,6 +63,8 @@ fn main() {
             commands::focus_session,
             commands::recent_projects,
             commands::get_config,
+            commands::get_usage_summary,
+            commands::set_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
