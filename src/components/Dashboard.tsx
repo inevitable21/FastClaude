@@ -1,5 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { useState } from "react";
+import { Plus, History as HistoryIcon, Settings as SettingsIcon } from "lucide-react";
 import { listSessions, onSessionChanged, getConfig } from "@/lib/ipc";
 import type { Session } from "@/types";
 import { SessionRow } from "./SessionRow";
@@ -46,29 +47,38 @@ export function Dashboard({
   }, [refresh]);
 
   return (
-    <div className="bg-background text-foreground">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-        <div className="flex items-center gap-2 font-semibold">
-          <img src="/icon.png" alt="" className="h-5 w-5 rounded-sm" />
+    <div className="text-foreground">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background/55 backdrop-blur-xl">
+        <div className="flex items-center gap-2.5 font-semibold tracking-tight">
+          <div
+            aria-hidden
+            className="h-[22px] w-[22px] rounded-md shadow-[0_0_12px_rgba(217,119,87,.4)] btn-primary-gradient"
+          />
           FastClaude
         </div>
+        <div className="flex-1" />
         <button
           onClick={() => setLaunchOpen(true)}
-          className="ml-auto px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm"
+          className="btn-primary-gradient inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-semibold text-primary-foreground shadow-[0_8px_24px_rgba(217,119,87,.32),inset_0_1px_0_rgba(255,255,255,.18)] hover:brightness-110 transition"
         >
-          + Launch new session
+          <Plus className="h-4 w-4" />
+          Launch new session
         </button>
         <button
           onClick={onOpenHistory}
-          className="px-3 py-1.5 rounded bg-secondary text-secondary-foreground text-sm"
+          title="History"
+          aria-label="History"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition"
         >
-          History
+          <HistoryIcon className="h-4 w-4" />
         </button>
         <button
           onClick={onOpenSettings}
-          className="px-3 py-1.5 rounded bg-secondary text-secondary-foreground text-sm"
+          title="Settings"
+          aria-label="Settings"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition"
         >
-          Settings
+          <SettingsIcon className="h-4 w-4" />
         </button>
       </div>
       <div className="p-4 min-h-[60vh]">
@@ -76,12 +86,12 @@ export function Dashboard({
           <EmptyState onLaunch={() => setLaunchOpen(true)} hotkey={hotkey} />
         ) : (
           <>
-            <div className="text-xs text-muted-foreground mb-2">
+            <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-3">
               {sessions.length} running session{sessions.length === 1 ? "" : "s"}
             </div>
             <div className="space-y-2">
-              {sessions.map((s) => (
-                <SessionRow key={s.id} session={s} onChange={refresh} />
+              {sessions.map((s, i) => (
+                <SessionRow key={s.id} session={s} onChange={refresh} index={i} />
               ))}
             </div>
           </>
