@@ -31,5 +31,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/inevitable21/FastClaude/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDREQzA3NjZFNkI0RjIyRUUKUldUdUlrOXJibmJBVFZyU3RZRDZqSUpvMWRrN0VmTU9EMStmNU9GYVlXaUhidTdqcjZQN1FZdU0K"
+    }
   }
 }
