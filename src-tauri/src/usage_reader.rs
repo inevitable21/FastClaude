@@ -1,7 +1,5 @@
-use crate::config::Pricing;
 use crate::error::AppResult;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
@@ -12,7 +10,6 @@ pub struct UsageDelta {
     pub tokens_out: i64,
     pub tokens_cache_read: i64,
     pub tokens_cache_write: i64,
-    pub cost_usd: f64,
     pub new_offset: u64,
 }
 
@@ -40,12 +37,7 @@ struct Usage {
     cache_read_input_tokens: i64,
 }
 
-pub fn read_delta(
-    path: &Path,
-    start_offset: u64,
-    model: &str,
-    pricing: &HashMap<String, Pricing>,
-) -> AppResult<UsageDelta> {
+pub fn read_delta(path: &Path, start_offset: u64) -> AppResult<UsageDelta> {
     let mut file = File::open(path)?;
     let total_len = file.metadata()?.len();
     if start_offset >= total_len {
@@ -79,13 +71,6 @@ pub fn read_delta(
     if delta.new_offset > total_len {
         delta.new_offset = total_len;
     }
-
-    if let Some(p) = pricing.get(model) {
-        delta.cost_usd = (delta.tokens_in as f64) * p.input / 1_000_000.0
-            + (delta.tokens_out as f64) * p.output / 1_000_000.0
-            + (delta.tokens_cache_read as f64) * p.cache_read / 1_000_000.0
-            + (delta.tokens_cache_write as f64) * p.cache_write / 1_000_000.0;
-    }
     Ok(delta)
 }
 
@@ -94,15 +79,6 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-
-    fn pricing() -> HashMap<String, Pricing> {
-        let mut p = HashMap::new();
-        p.insert(
-            "claude-opus-4-7".into(),
-            Pricing { input: 15.0, output: 75.0, cache_read: 1.5, cache_write: 18.75 },
-        );
-        p
-    }
 
     fn write_jsonl(lines: &[&str]) -> NamedTempFile {
         let mut f = NamedTempFile::new().unwrap();
@@ -120,13 +96,11 @@ mod tests {
             r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":1000,"cache_read_input_tokens":200}}}"#,
             r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":50,"output_tokens":25}}}"#,
         ]);
-        let d = read_delta(f.path(), 0, "claude-opus-4-7", &pricing()).unwrap();
+        let d = read_delta(f.path(), 0).unwrap();
         assert_eq!(d.tokens_in, 150);
         assert_eq!(d.tokens_out, 75);
         assert_eq!(d.tokens_cache_read, 200);
         assert_eq!(d.tokens_cache_write, 1000);
-        let expect = (150.0 * 15.0 + 75.0 * 75.0 + 200.0 * 1.5 + 1000.0 * 18.75) / 1_000_000.0;
-        assert!((d.cost_usd - expect).abs() < 1e-9);
         assert!(d.new_offset > 0);
     }
 
@@ -136,9 +110,9 @@ mod tests {
             r#"{"type":"user","message":{"role":"user","content":"hi"}}"#,
             r#"{"type":"summary","content":"..."}"#,
         ]);
-        let d = read_delta(f.path(), 0, "claude-opus-4-7", &pricing()).unwrap();
+        let d = read_delta(f.path(), 0).unwrap();
         assert_eq!(d.tokens_in, 0);
-        assert_eq!(d.cost_usd, 0.0);
+        assert_eq!(d.tokens_out, 0);
     }
 
     #[test]
@@ -147,7 +121,7 @@ mod tests {
             r#"not even json"#,
             r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":10,"output_tokens":5}}}"#,
         ]);
-        let d = read_delta(f.path(), 0, "claude-opus-4-7", &pricing()).unwrap();
+        let d = read_delta(f.path(), 0).unwrap();
         assert_eq!(d.tokens_in, 10);
         assert_eq!(d.tokens_out, 5);
     }
@@ -158,23 +132,13 @@ mod tests {
             r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":50}}}"#,
             r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":1,"output_tokens":2}}}"#,
         ]);
-        let first = read_delta(f.path(), 0, "claude-opus-4-7", &pricing()).unwrap();
+        let first = read_delta(f.path(), 0).unwrap();
         let line1_len = (
             r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":50}}}"#
         ).len() as u64 + 1;
-        let second = read_delta(f.path(), line1_len, "claude-opus-4-7", &pricing()).unwrap();
+        let second = read_delta(f.path(), line1_len).unwrap();
         assert_eq!(second.tokens_in, 1);
         assert_eq!(second.tokens_out, 2);
         assert_eq!(first.tokens_in, 101);
-    }
-
-    #[test]
-    fn missing_model_pricing_zeroes_cost() {
-        let f = write_jsonl(&[
-            r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":100,"output_tokens":50}}}"#,
-        ]);
-        let d = read_delta(f.path(), 0, "claude-unknown", &pricing()).unwrap();
-        assert_eq!(d.tokens_in, 100);
-        assert_eq!(d.cost_usd, 0.0);
     }
 }

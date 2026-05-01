@@ -1,9 +1,9 @@
 pub mod commands;
 pub mod config;
-pub mod cost_reader;
 pub mod error;
 pub mod poller;
 pub mod recent_projects;
 pub mod session_registry;
 pub mod spawner;
+pub mod usage_reader;
 pub mod window_focus;

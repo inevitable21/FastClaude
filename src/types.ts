@@ -17,7 +17,6 @@ export interface Session {
   tokens_out: number;
   tokens_cache_read: number;
   tokens_cache_write: number;
-  cost_usd: number;
 }
 
 export interface RecentProject {
@@ -31,16 +30,4 @@ export interface AppConfig {
   default_model: string;
   hotkey: string;
   idle_threshold_seconds: number;
-  pricing: Record<
-    string,
-    { input: number; output: number; cache_read: number; cache_write: number }
-  >;
-}
-
-export interface UsageSummary {
-  tokens_in: number;
-  tokens_out: number;
-  tokens_cache_read: number;
-  tokens_cache_write: number;
-  cost_usd: number;
 }

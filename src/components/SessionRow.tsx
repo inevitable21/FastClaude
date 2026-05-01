@@ -3,6 +3,12 @@ import { useToast } from "@/hooks/use-toast";
 import type { Session } from "@/types";
 import { focusSession, killSession } from "@/lib/ipc";
 
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return `${n}`;
+}
+
 function elapsed(startedAt: number): string {
   const secs = Math.max(0, Math.floor(Date.now() / 1000) - startedAt);
   const h = Math.floor(secs / 3600);
@@ -65,8 +71,8 @@ export function SessionRow({
         <div className="font-semibold text-sm truncate">{projectName}</div>
         <div className="text-xs text-muted-foreground truncate">{session.project_dir}</div>
       </div>
-      {session.cost_usd > 0 && (
-        <div className="text-xs text-muted-foreground">${session.cost_usd.toFixed(2)}</div>
+      {session.tokens_out > 0 && (
+        <div className="text-xs text-muted-foreground">tokens: {fmtTokens(session.tokens_out)}</div>
       )}
       <div className="text-xs text-muted-foreground">{elapsed(session.started_at)}</div>
       <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-800">

@@ -49,16 +49,6 @@ pub struct Session {
     pub tokens_out: i64,
     pub tokens_cache_read: i64,
     pub tokens_cache_write: i64,
-    pub cost_usd: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct UsageSummary {
-    pub tokens_in: i64,
-    pub tokens_out: i64,
-    pub tokens_cache_read: i64,
-    pub tokens_cache_write: i64,
-    pub cost_usd: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -109,8 +99,7 @@ impl Registry {
                 tokens_in INTEGER NOT NULL DEFAULT 0,
                 tokens_out INTEGER NOT NULL DEFAULT 0,
                 tokens_cache_read INTEGER NOT NULL DEFAULT 0,
-                tokens_cache_write INTEGER NOT NULL DEFAULT 0,
-                cost_usd REAL NOT NULL DEFAULT 0
+                tokens_cache_write INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_active
               ON sessions(ended_at) WHERE ended_at IS NULL;
@@ -139,7 +128,6 @@ impl Registry {
             tokens_out: 0,
             tokens_cache_read: 0,
             tokens_cache_write: 0,
-            cost_usd: 0.0,
         };
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -170,7 +158,7 @@ impl Registry {
         let sql = format!(
             "SELECT id, project_dir, model, claude_pid, terminal_pid, terminal_window_handle,
                     started_at, ended_at, jsonl_path, jsonl_offset, status, last_activity_at,
-                    tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd
+                    tokens_in, tokens_out, tokens_cache_read, tokens_cache_write
              FROM sessions WHERE {where_clause}"
         );
         let mut stmt = conn.prepare(&sql)?;
@@ -187,7 +175,7 @@ impl Registry {
         let mut stmt = conn.prepare(
             "SELECT id, project_dir, model, claude_pid, terminal_pid, terminal_window_handle,
                     started_at, ended_at, jsonl_path, jsonl_offset, status, last_activity_at,
-                    tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd
+                    tokens_in, tokens_out, tokens_cache_read, tokens_cache_write
              FROM sessions WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -243,7 +231,6 @@ impl Registry {
         add_tokens_out: i64,
         add_tokens_cache_read: i64,
         add_tokens_cache_write: i64,
-        add_cost_usd: f64,
         last_activity_at: i64,
     ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
@@ -255,9 +242,8 @@ impl Registry {
                 tokens_out = tokens_out + ?3,
                 tokens_cache_read = tokens_cache_read + ?4,
                 tokens_cache_write = tokens_cache_write + ?5,
-                cost_usd = cost_usd + ?6,
-                last_activity_at = ?7
-            WHERE id = ?8
+                last_activity_at = ?6
+            WHERE id = ?7
             "#,
             params![
                 new_offset,
@@ -265,7 +251,6 @@ impl Registry {
                 add_tokens_out,
                 add_tokens_cache_read,
                 add_tokens_cache_write,
-                add_cost_usd,
                 last_activity_at,
                 id,
             ],
@@ -274,26 +259,6 @@ impl Registry {
             return Err(AppError::NotFound(format!("session {id}")));
         }
         Ok(())
-    }
-
-    pub fn usage_since(&self, since: i64) -> AppResult<UsageSummary> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0),
-                    COALESCE(SUM(tokens_cache_read),0), COALESCE(SUM(tokens_cache_write),0),
-                    COALESCE(SUM(cost_usd),0)
-             FROM sessions WHERE started_at >= ?1",
-        )?;
-        let row = stmt.query_row(params![since], |r| {
-            Ok(UsageSummary {
-                tokens_in: r.get(0)?,
-                tokens_out: r.get(1)?,
-                tokens_cache_read: r.get(2)?,
-                tokens_cache_write: r.get(3)?,
-                cost_usd: r.get(4)?,
-            })
-        })?;
-        Ok(row)
     }
 }
 
@@ -316,7 +281,6 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         tokens_out: row.get(13)?,
         tokens_cache_read: row.get(14)?,
         tokens_cache_write: row.get(15)?,
-        cost_usd: row.get(16)?,
     })
 }
 
@@ -377,26 +341,15 @@ mod tests {
     fn apply_usage_delta_accumulates() {
         let r = make();
         let s = r.insert(new_sess("/p")).unwrap();
-        r.apply_usage_delta(&s.id, 100, 10, 20, 1, 2, 0.05, 12345).unwrap();
-        r.apply_usage_delta(&s.id, 200, 5, 5, 0, 0, 0.01, 23456).unwrap();
+        r.apply_usage_delta(&s.id, 100, 10, 20, 1, 2, 12345).unwrap();
+        r.apply_usage_delta(&s.id, 200, 5, 5, 0, 0, 23456).unwrap();
         let got = r.get(&s.id).unwrap();
         assert_eq!(got.tokens_in, 15);
         assert_eq!(got.tokens_out, 25);
+        assert_eq!(got.tokens_cache_read, 1);
+        assert_eq!(got.tokens_cache_write, 2);
         assert_eq!(got.jsonl_offset, 200);
-        assert!((got.cost_usd - 0.06).abs() < 1e-9);
         assert_eq!(got.last_activity_at, 23456);
-    }
-
-    #[test]
-    fn usage_since_sums_recent_only() {
-        let r = make();
-        let a = r.insert(new_sess("/a")).unwrap();
-        let b = r.insert(new_sess("/b")).unwrap();
-        r.apply_usage_delta(&a.id, 0, 100, 0, 0, 0, 0.10, 0).unwrap();
-        r.apply_usage_delta(&b.id, 0, 50, 0, 0, 0, 0.05, 0).unwrap();
-        let summary = r.usage_since(0).unwrap();
-        assert_eq!(summary.tokens_in, 150);
-        assert!((summary.cost_usd - 0.15).abs() < 1e-9);
     }
 
     #[test]

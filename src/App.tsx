@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Dashboard } from "@/components/Dashboard";
 import { Settings } from "@/components/Settings";
-import { UsageStrip } from "@/components/UsageStrip";
 import { Toaster } from "@/components/ui/toaster";
 import { onHotkeyFired } from "@/lib/ipc";
 
@@ -35,7 +34,6 @@ export default function App() {
           <Settings onBack={() => setView("dashboard")} />
         )}
       </div>
-      <UsageStrip />
       <Toaster />
     </div>
   );

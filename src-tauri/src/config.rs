@@ -1,15 +1,6 @@
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Pricing {
-    pub input: f64,
-    pub output: f64,
-    pub cache_read: f64,
-    pub cache_write: f64,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
@@ -17,30 +8,15 @@ pub struct Config {
     pub default_model: String,
     pub hotkey: String,
     pub idle_threshold_seconds: u64,
-    pub pricing: HashMap<String, Pricing>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        let mut pricing = HashMap::new();
-        pricing.insert(
-            "claude-opus-4-7".into(),
-            Pricing { input: 15.0, output: 75.0, cache_read: 1.5, cache_write: 18.75 },
-        );
-        pricing.insert(
-            "claude-sonnet-4-6".into(),
-            Pricing { input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75 },
-        );
-        pricing.insert(
-            "claude-haiku-4-5".into(),
-            Pricing { input: 1.0, output: 5.0, cache_read: 0.1, cache_write: 1.25 },
-        );
         Self {
             terminal_program: "auto".into(),
             default_model: "claude-opus-4-7".into(),
             hotkey: "Ctrl+Shift+C".into(),
             idle_threshold_seconds: 300,
-            pricing,
         }
     }
 }
@@ -97,5 +73,20 @@ mod tests {
         let path = dir.path().join("c.json");
         std::fs::write(&path, b"not json").unwrap();
         assert!(matches!(load(&path), Err(AppError::Json(_))));
+    }
+
+    #[test]
+    fn load_ignores_legacy_pricing_field() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(
+            &path,
+            br#"{"terminal_program":"auto","default_model":"claude-opus-4-7",
+                "hotkey":"Ctrl+Shift+C","idle_threshold_seconds":300,
+                "pricing":{"claude-opus-4-7":{"input":15,"output":75,"cache_read":1.5,"cache_write":18.75}}}"#,
+        )
+        .unwrap();
+        let cfg = load(&path).unwrap();
+        assert_eq!(cfg.default_model, "claude-opus-4-7");
     }
 }

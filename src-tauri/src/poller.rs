@@ -1,8 +1,8 @@
 use crate::config::Config;
-use crate::cost_reader;
 use crate::error::AppResult;
 use crate::recent_projects;
 use crate::session_registry::{Registry, Session, Status};
+use crate::usage_reader;
 use std::path::PathBuf;
 use std::sync::Arc;
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
@@ -74,12 +74,7 @@ pub fn tick(
             Err(_) => continue,
         };
         if mtime > s.last_activity_at {
-            let delta = cost_reader::read_delta(
-                &jsonl,
-                s.jsonl_offset as u64,
-                &s.model,
-                &cfg.pricing,
-            )?;
+            let delta = usage_reader::read_delta(&jsonl, s.jsonl_offset as u64)?;
             registry.apply_usage_delta(
                 &s.id,
                 delta.new_offset as i64,
@@ -87,7 +82,6 @@ pub fn tick(
                 delta.tokens_out,
                 delta.tokens_cache_read,
                 delta.tokens_cache_write,
-                delta.cost_usd,
                 mtime,
             )?;
             if s.status != Status::Running {

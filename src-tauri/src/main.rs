@@ -63,11 +63,8 @@ fn main() {
                     cfg_for_poller,
                     std::time::Duration::from_secs(2),
                     move |report| {
-                        if !report.ended_ids.is_empty() {
+                        if !report.ended_ids.is_empty() || report.usage_changed {
                             let _ = app_handle.emit("session-changed", &report.ended_ids);
-                        }
-                        if report.usage_changed {
-                            let _ = app_handle.emit("usage-updated", ());
                         }
                     },
                 )
@@ -83,7 +80,6 @@ fn main() {
             commands::focus_session,
             commands::recent_projects,
             commands::get_config,
-            commands::get_usage_summary,
             commands::set_config,
         ])
         .run(tauri::generate_context!())
