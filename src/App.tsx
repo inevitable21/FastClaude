@@ -1,14 +1,21 @@
 import { useEffect, useState } from "react";
 import { Dashboard } from "@/components/Dashboard";
 import { Settings } from "@/components/Settings";
+import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui/toaster";
-import { onHotkeyFired } from "@/lib/ipc";
+import { onHotkeyFired, getFirstRun } from "@/lib/ipc";
 
-type View = "dashboard" | "settings";
+type View = "dashboard" | "settings" | "onboarding";
 
 export default function App() {
-  const [view, setView] = useState<View>("dashboard");
+  const [view, setView] = useState<View | null>(null);
   const [launchOpen, setLaunchOpen] = useState(false);
+
+  useEffect(() => {
+    getFirstRun()
+      .then((isFirst) => setView(isFirst ? "onboarding" : "dashboard"))
+      .catch(() => setView("dashboard"));
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -21,10 +28,14 @@ export default function App() {
     return () => unlisten?.();
   }, []);
 
+  if (view === null) return null;
+
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
       <div className="flex-1 flex flex-col">
-        {view === "dashboard" ? (
+        {view === "onboarding" ? (
+          <Onboarding onDone={() => setView("dashboard")} />
+        ) : view === "dashboard" ? (
           <Dashboard
             onOpenSettings={() => setView("settings")}
             launchOpen={launchOpen}
