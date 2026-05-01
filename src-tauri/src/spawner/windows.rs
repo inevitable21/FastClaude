@@ -1,6 +1,6 @@
 use super::{SpawnRequest, SpawnResult, Spawner};
 use crate::error::{AppError, AppResult};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
@@ -115,28 +115,50 @@ fn build_claude_command(model: &str, prompt: Option<&str>) -> String {
 
 fn wait_for_claude(project_dir: &str, deadline: Duration) -> AppResult<u32> {
     let start = Instant::now();
-    let target = std::path::PathBuf::from(project_dir);
+    let target = normalize_path(project_dir);
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
     while start.elapsed() < deadline {
         sys.refresh_processes();
+        // Find processes whose cwd matches and whose cmdline mentions "claude".
+        // Picks the most recently started match (the leaf node.exe, not the
+        // shell or terminal host that also share the cwd).
+        let mut best: Option<(Pid, u64)> = None;
         for (pid, proc) in sys.processes() {
-            let name = proc.name().to_lowercase();
-            if !(name == "claude.exe" || name == "claude") {
+            let Some(cwd) = proc.cwd() else { continue };
+            if normalize_path(cwd.to_string_lossy().as_ref()) != target {
                 continue;
             }
-            if let Some(cwd) = proc.cwd() {
-                if cwd == target {
-                    return Ok(pid.as_u32());
-                }
+            let mentions_claude = proc
+                .cmd()
+                .iter()
+                .any(|s| s.to_lowercase().contains("claude"))
+                || proc.name().to_lowercase().contains("claude");
+            if !mentions_claude {
+                continue;
+            }
+            let started = proc.start_time();
+            if best.map_or(true, |(_, t)| started > t) {
+                best = Some((*pid, started));
             }
         }
-        std::thread::sleep(Duration::from_millis(150));
+        if let Some((pid, _)) = best {
+            return Ok(pid.as_u32());
+        }
+        std::thread::sleep(Duration::from_millis(200));
     }
     Err(AppError::Spawn(format!(
         "did not see claude process for {project_dir} within timeout"
     )))
+}
+
+fn normalize_path(p: &str) -> String {
+    let s = Path::new(p)
+        .to_string_lossy()
+        .to_lowercase()
+        .replace('\\', "/");
+    s.trim_end_matches('/').to_string()
 }
 
 fn parent_pid_of(pid: u32) -> Option<u32> {
