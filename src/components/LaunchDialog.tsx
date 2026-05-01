@@ -234,7 +234,7 @@ export function LaunchDialog({
               placeholder="C:/path/to/project"
             />
             {recents.length > 0 && (
-              <div className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-black/20">
+              <div className="mt-2 max-h-40 overflow-auto rounded-md border border-border bg-foreground/[0.03]">
                 {recents.map((r, i) => (
                   <button
                     key={r.encoded_name}
@@ -321,7 +321,7 @@ export function LaunchDialog({
             />
           </div>
           {preview && (
-            <div className="text-[11px] font-mono bg-black/30 border border-border rounded-md p-2 break-all">
+            <div className="text-[11px] font-mono bg-foreground/[0.04] border border-border rounded-md p-2 break-all">
               <span className="text-accent">Will run:</span> {preview}
             </div>
           )}

@@ -42,7 +42,7 @@ export function UpdateBanner() {
       <div className="flex-1">FastClaude {update.version} is available.</div>
       <button
         onClick={install}
-        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition"
+        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
       >
         Restart &amp; install
       </button>
@@ -50,7 +50,7 @@ export function UpdateBanner() {
         onClick={() => setDismissed(true)}
         title="Dismiss"
         aria-label="Dismiss"
-        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
       >
         <X className="h-3.5 w-3.5" />
       </button>
