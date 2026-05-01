@@ -30,6 +30,19 @@ export interface AppConfig {
   default_model: string;
   hotkey: string;
   idle_threshold_seconds: number;
+  default_effort: string;
+  default_permission_mode: string;
+  default_extra_args: string;
+}
+
+export interface LaunchInput {
+  project_dir: string;
+  model?: string;
+  prompt?: string;
+  resume?: string;
+  effort?: string;
+  permission_mode?: string;
+  extra_args?: string;
 }
 
 export interface UpdateInfo {

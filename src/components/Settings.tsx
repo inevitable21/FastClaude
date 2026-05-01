@@ -11,6 +11,13 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { getConfig, setConfig, checkForUpdate } from "@/lib/ipc";
 import { MODELS } from "@/lib/models";
+import {
+  EFFORT_OPTIONS,
+  PERMISSION_MODE_OPTIONS,
+  UNSET,
+  fromUnset,
+  toUnset,
+} from "@/lib/launch-options";
 import type { AppConfig } from "@/types";
 
 export function Settings({ onBack }: { onBack: () => void }) {
@@ -90,6 +97,54 @@ export function Settings({ onBack }: { onBack: () => void }) {
               ))}
             </SelectContent>
           </Select>
+        </label>
+        <label className="block">
+          <div className="text-xs font-medium mb-1">Default --effort</div>
+          <Select
+            value={toUnset(draft.default_effort)}
+            onValueChange={(v) =>
+              setDraft({ ...draft, default_effort: fromUnset(v) })
+            }
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={UNSET}>(don't pass)</SelectItem>
+              {EFFORT_OPTIONS.map((e) => (
+                <SelectItem key={e} value={e}>{e}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="block">
+          <div className="text-xs font-medium mb-1">Default --permission-mode</div>
+          <Select
+            value={toUnset(draft.default_permission_mode)}
+            onValueChange={(v) =>
+              setDraft({ ...draft, default_permission_mode: fromUnset(v) })
+            }
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={UNSET}>(don't pass)</SelectItem>
+              {PERMISSION_MODE_OPTIONS.map((m) => (
+                <SelectItem key={m} value={m}>{m}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="block">
+          <div className="text-xs font-medium mb-1">Default extra args (free-form)</div>
+          <Input
+            value={draft.default_extra_args}
+            onChange={(e) =>
+              setDraft({ ...draft, default_extra_args: e.target.value })
+            }
+            placeholder='e.g. --name "MyAgent" --no-session-persistence'
+          />
         </label>
         {field("Global hotkey", draft.hotkey, (v) =>
           setDraft({ ...draft, hotkey: v })

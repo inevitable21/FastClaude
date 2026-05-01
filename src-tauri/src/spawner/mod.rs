@@ -19,6 +19,51 @@ pub struct SpawnRequest {
     /// existing JSONL conversation instead of starting fresh.
     #[serde(default)]
     pub resume: Option<String>,
+    /// `--effort` value (empty = don't pass).
+    #[serde(default)]
+    pub effort: String,
+    /// `--permission-mode` value (empty = don't pass).
+    #[serde(default)]
+    pub permission_mode: String,
+    /// Free-form extra args appended verbatim before the prompt.
+    #[serde(default)]
+    pub extra_args: String,
+}
+
+/// Build the `claude` command string from the launch parameters. Pure so
+/// it can also drive the LaunchDialog command preview via the
+/// `preview_launch_command` IPC. Order matters only for the prompt: it
+/// must be the final positional arg.
+pub fn build_claude_command(
+    model: &str,
+    prompt: Option<&str>,
+    resume: Option<&str>,
+    effort: &str,
+    permission_mode: &str,
+    extra_args: &str,
+) -> String {
+    let mut cmd = format!("claude --model {model}");
+    if !effort.is_empty() {
+        cmd.push_str(&format!(" --effort {}", shell_escape::escape(effort.into())));
+    }
+    if !permission_mode.is_empty() {
+        cmd.push_str(&format!(
+            " --permission-mode {}",
+            shell_escape::escape(permission_mode.into())
+        ));
+    }
+    if let Some(id) = resume.filter(|s| !s.is_empty()) {
+        cmd.push_str(&format!(" --resume {}", shell_escape::escape(id.into())));
+    }
+    let trimmed_extra = extra_args.trim();
+    if !trimmed_extra.is_empty() {
+        cmd.push(' ');
+        cmd.push_str(trimmed_extra);
+    }
+    if let Some(p) = prompt.filter(|s| !s.is_empty()) {
+        cmd.push_str(&format!(" {}", shell_escape::escape(p.into())));
+    }
+    cmd
 }
 
 #[derive(Debug, Clone)]

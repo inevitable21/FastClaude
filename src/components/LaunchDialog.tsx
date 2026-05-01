@@ -15,8 +15,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { launchSession, recentProjects, getConfig } from "@/lib/ipc";
+import {
+  launchSession,
+  recentProjects,
+  getConfig,
+  previewLaunchCommand,
+} from "@/lib/ipc";
 import { MODELS } from "@/lib/models";
+import {
+  EFFORT_OPTIONS,
+  PERMISSION_MODE_OPTIONS,
+  UNSET,
+  fromUnset,
+  toUnset,
+} from "@/lib/launch-options";
 import type { RecentProject, AppConfig } from "@/types";
 
 export function LaunchDialog({
@@ -34,6 +46,10 @@ export function LaunchDialog({
   const [projectDir, setProjectDir] = useState("");
   const [model, setModel] = useState<string>(MODELS[0]);
   const [prompt, setPrompt] = useState("");
+  const [effort, setEffort] = useState<string>("");
+  const [permissionMode, setPermissionMode] = useState<string>("");
+  const [extraArgs, setExtraArgs] = useState<string>("");
+  const [preview, setPreview] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -45,9 +61,35 @@ export function LaunchDialog({
       .then((c) => {
         setCfg(c);
         setModel(c.default_model);
+        setEffort(c.default_effort);
+        setPermissionMode(c.default_permission_mode);
+        setExtraArgs(c.default_extra_args);
       })
       .catch(() => {});
   }, [open]);
+
+  // Live preview — backend builds the exact command so the preview matches reality.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    previewLaunchCommand({
+      project_dir: projectDir.trim() || ".",
+      model,
+      prompt: prompt || undefined,
+      effort,
+      permission_mode: permissionMode,
+      extra_args: extraArgs,
+    })
+      .then((cmd) => {
+        if (!cancelled) setPreview(cmd);
+      })
+      .catch(() => {
+        if (!cancelled) setPreview("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, projectDir, model, prompt, effort, permissionMode, extraArgs]);
 
   async function submit() {
     if (!projectDir.trim()) {
@@ -61,6 +103,9 @@ export function LaunchDialog({
         project_dir: projectDir.trim(),
         model,
         prompt: prompt || undefined,
+        effort,
+        permission_mode: permissionMode,
+        extra_args: extraArgs,
       });
       toast({ title: "Session launched" });
       onLaunched();
@@ -110,12 +155,51 @@ export function LaunchDialog({
               </SelectTrigger>
               <SelectContent>
                 {MODELS.map((m) => (
-                  <SelectItem key={m} value={m}>
-                    {m}
-                  </SelectItem>
+                  <SelectItem key={m} value={m}>{m}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-medium">--effort</label>
+              <Select value={toUnset(effort)} onValueChange={(v) => setEffort(fromUnset(v))}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={UNSET}>(don't pass)</SelectItem>
+                  {EFFORT_OPTIONS.map((e) => (
+                    <SelectItem key={e} value={e}>{e}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-xs font-medium">--permission-mode</label>
+              <Select
+                value={toUnset(permissionMode)}
+                onValueChange={(v) => setPermissionMode(fromUnset(v))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={UNSET}>(don't pass)</SelectItem>
+                  {PERMISSION_MODE_OPTIONS.map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium">Extra args</label>
+            <Input
+              value={extraArgs}
+              onChange={(e) => setExtraArgs(e.target.value)}
+              placeholder='--name "MyAgent" --no-session-persistence'
+            />
           </div>
           <div>
             <label className="text-xs font-medium">Starting prompt (optional)</label>
@@ -125,6 +209,11 @@ export function LaunchDialog({
               placeholder="Implement X..."
             />
           </div>
+          {preview && (
+            <div className="text-[11px] font-mono bg-muted/50 border border-border rounded p-2 break-all">
+              <span className="text-muted-foreground">Will run:</span> {preview}
+            </div>
+          )}
           {err && <div className="text-xs text-destructive">{err}</div>}
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>

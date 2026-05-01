@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Session, RecentProject, AppConfig, UpdateInfo } from "@/types";
+import type { Session, RecentProject, AppConfig, UpdateInfo, LaunchInput } from "@/types";
 
 export async function listSessions(): Promise<Session[]> {
   return invoke<Session[]>("list_sessions");
@@ -10,13 +10,12 @@ export async function listAllSessions(): Promise<Session[]> {
   return invoke<Session[]>("list_all_sessions");
 }
 
-export async function launchSession(input: {
-  project_dir: string;
-  model?: string;
-  prompt?: string;
-  resume?: string;
-}): Promise<Session> {
+export async function launchSession(input: LaunchInput): Promise<Session> {
   return invoke<Session>("launch_session", { input });
+}
+
+export async function previewLaunchCommand(input: LaunchInput): Promise<string> {
+  return invoke<string>("preview_launch_command", { input });
 }
 
 export async function killSession(id: string): Promise<void> {

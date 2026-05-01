@@ -90,6 +90,7 @@ fn main() {
             commands::recent_projects,
             commands::get_config,
             commands::set_config,
+            commands::preview_launch_command,
             commands::get_first_run,
             commands::clear_first_run,
             commands::check_for_update,

@@ -8,6 +8,18 @@ pub struct Config {
     pub default_model: String,
     pub hotkey: String,
     pub idle_threshold_seconds: u64,
+    /// Default --effort flag value for new launches; empty string = don't pass.
+    /// Valid: "low" | "medium" | "high" | "xhigh" | "max".
+    #[serde(default)]
+    pub default_effort: String,
+    /// Default --permission-mode flag value; empty = don't pass.
+    /// Valid: "acceptEdits" | "auto" | "bypassPermissions" | "default" | "dontAsk" | "plan".
+    #[serde(default)]
+    pub default_permission_mode: String,
+    /// Free-form extra args appended verbatim to every launch (unless
+    /// overridden in the LaunchDialog).
+    #[serde(default)]
+    pub default_extra_args: String,
 }
 
 impl Default for Config {
@@ -17,6 +29,9 @@ impl Default for Config {
             default_model: "claude-opus-4-7".into(),
             hotkey: "Ctrl+Shift+C".into(),
             idle_threshold_seconds: 300,
+            default_effort: String::new(),
+            default_permission_mode: String::new(),
+            default_extra_args: String::new(),
         }
     }
 }

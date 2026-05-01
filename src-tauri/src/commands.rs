@@ -28,6 +28,15 @@ pub struct LaunchInput {
     /// existing JSONL conversation instead of starting fresh.
     #[serde(default)]
     pub resume: Option<String>,
+    /// Per-launch override for `--effort`. None = use config default.
+    #[serde(default)]
+    pub effort: Option<String>,
+    /// Per-launch override for `--permission-mode`. None = use config default.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    /// Per-launch override for free-form extra args. None = use config default.
+    #[serde(default)]
+    pub extra_args: Option<String>,
 }
 
 #[tauri::command]
@@ -54,6 +63,13 @@ pub fn launch_session(
         prompt: input.prompt,
         terminal_program: cfg.terminal_program.clone(),
         resume: input.resume,
+        effort: input.effort.unwrap_or_else(|| cfg.default_effort.clone()),
+        permission_mode: input
+            .permission_mode
+            .unwrap_or_else(|| cfg.default_permission_mode.clone()),
+        extra_args: input
+            .extra_args
+            .unwrap_or_else(|| cfg.default_extra_args.clone()),
     };
     let result = state.spawner.spawn(&req)?;
     let session = state.registry.insert(NewSession {
@@ -175,6 +191,27 @@ pub fn set_config(state: State<'_, AppState>, cfg: Config) -> AppResult<()> {
     }
     config::save(&state.config_path, &cfg)?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn preview_launch_command(state: State<'_, AppState>, input: LaunchInput) -> String {
+    let cfg = state.config.lock().unwrap().clone();
+    let model = input.model.unwrap_or(cfg.default_model.clone());
+    let effort = input.effort.unwrap_or_else(|| cfg.default_effort.clone());
+    let permission_mode = input
+        .permission_mode
+        .unwrap_or_else(|| cfg.default_permission_mode.clone());
+    let extra_args = input
+        .extra_args
+        .unwrap_or_else(|| cfg.default_extra_args.clone());
+    crate::spawner::build_claude_command(
+        &model,
+        input.prompt.as_deref(),
+        input.resume.as_deref(),
+        &effort,
+        &permission_mode,
+        &extra_args,
+    )
 }
 
 #[tauri::command]
