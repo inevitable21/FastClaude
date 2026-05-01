@@ -72,14 +72,6 @@ export function LaunchDialog({
       .catch(() => {});
   }, [open]);
 
-  // Radix Dialog's internal focus trap claims focus on its own first
-  // focusable (often the close-X). Push focus back to the project input
-  // after the dialog mounts so arrow keys hit our onKeyDown handler.
-  useEffect(() => {
-    if (!open) return;
-    const t = setTimeout(() => inputRef.current?.focus(), 50);
-    return () => clearTimeout(t);
-  }, [open]);
 
   // Live preview — backend builds the exact command so the preview matches reality.
   useEffect(() => {
@@ -172,7 +164,15 @@ export function LaunchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto">
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto"
+        onOpenAutoFocus={(e) => {
+          // Radix would otherwise focus its first focusable (often the
+          // close X), which swallows our arrow-key onKeyDown.
+          e.preventDefault();
+          inputRef.current?.focus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Launch session</DialogTitle>
         </DialogHeader>
