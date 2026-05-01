@@ -41,3 +41,11 @@ export async function onSessionChanged(handler: () => void): Promise<UnlistenFn>
 export async function onHotkeyFired(handler: () => void): Promise<UnlistenFn> {
   return listen("hotkey-fired", () => handler());
 }
+
+export async function getFirstRun(): Promise<boolean> {
+  return invoke<boolean>("get_first_run");
+}
+
+export async function clearFirstRun(): Promise<void> {
+  return invoke<void>("clear_first_run");
+}

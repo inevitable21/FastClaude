@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -20,7 +21,7 @@ fn main() {
             std::fs::create_dir_all(&data_dir).ok();
 
             let cfg_path = data_dir.join("config.json");
-            let (cfg, _was_created) = config::load(&cfg_path).expect("load config");
+            let (cfg, was_created) = config::load(&cfg_path).expect("load config");
             let cfg_arc = Arc::new(Mutex::new(cfg));
 
             let db_path = data_dir.join("state.db");
@@ -34,6 +35,7 @@ fn main() {
                 focus: window_focus::default_focus(),
                 config: cfg_arc.clone(),
                 config_path: cfg_path.clone(),
+                is_first_run: AtomicBool::new(was_created),
             };
             app.manage(state);
 
@@ -87,6 +89,8 @@ fn main() {
             commands::recent_projects,
             commands::get_config,
             commands::set_config,
+            commands::get_first_run,
+            commands::clear_first_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

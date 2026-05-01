@@ -5,6 +5,7 @@ use crate::session_registry::{NewSession, Registry, Session};
 use crate::spawner::{SpawnRequest, Spawner};
 use crate::window_focus::WindowFocus;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tauri::{Emitter, State};
@@ -15,6 +16,7 @@ pub struct AppState {
     pub focus: Box<dyn WindowFocus>,
     pub config: Arc<Mutex<Config>>,
     pub config_path: PathBuf,
+    pub is_first_run: AtomicBool,
 }
 
 #[derive(serde::Deserialize)]
@@ -168,4 +170,14 @@ pub fn set_config(state: State<'_, AppState>, cfg: Config) -> AppResult<()> {
     }
     config::save(&state.config_path, &cfg)?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn get_first_run(state: State<'_, AppState>) -> bool {
+    state.is_first_run.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub fn clear_first_run(state: State<'_, AppState>) {
+    state.is_first_run.store(false, Ordering::SeqCst);
 }
