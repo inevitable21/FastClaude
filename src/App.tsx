@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { Dashboard } from "@/components/Dashboard";
 import { Settings } from "@/components/Settings";
 import { Onboarding } from "@/components/Onboarding";
+import { History } from "@/components/History";
 import { Toaster } from "@/components/ui/toaster";
 import { onHotkeyFired, getFirstRun } from "@/lib/ipc";
 import { UpdateBanner } from "@/components/UpdateBanner";
 
-type View = "dashboard" | "settings" | "onboarding";
+type View = "dashboard" | "settings" | "onboarding" | "history";
 
 export default function App() {
   const [view, setView] = useState<View | null>(null);
@@ -40,9 +41,12 @@ export default function App() {
         ) : view === "dashboard" ? (
           <Dashboard
             onOpenSettings={() => setView("settings")}
+            onOpenHistory={() => setView("history")}
             launchOpen={launchOpen}
             setLaunchOpen={setLaunchOpen}
           />
+        ) : view === "history" ? (
+          <History onBack={() => setView("dashboard")} />
         ) : (
           <Settings onBack={() => setView("dashboard")} />
         )}

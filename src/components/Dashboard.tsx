@@ -8,10 +8,12 @@ import { EmptyState } from "./EmptyState";
 
 export function Dashboard({
   onOpenSettings,
+  onOpenHistory,
   launchOpen,
   setLaunchOpen,
 }: {
   onOpenSettings: () => void;
+  onOpenHistory: () => void;
   launchOpen: boolean;
   setLaunchOpen: (v: boolean) => void;
 }) {
@@ -45,6 +47,12 @@ export function Dashboard({
           className="ml-auto px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm"
         >
           + Launch new session
+        </button>
+        <button
+          onClick={onOpenHistory}
+          className="px-3 py-1.5 rounded bg-secondary text-secondary-foreground text-sm"
+        >
+          History
         </button>
         <button
           onClick={onOpenSettings}

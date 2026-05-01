@@ -6,6 +6,10 @@ export async function listSessions(): Promise<Session[]> {
   return invoke<Session[]>("list_sessions");
 }
 
+export async function listAllSessions(): Promise<Session[]> {
+  return invoke<Session[]>("list_all_sessions");
+}
+
 export async function launchSession(input: {
   project_dir: string;
   model?: string;
