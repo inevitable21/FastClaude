@@ -1,13 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
+import { useState } from "react";
 import { listSessions, onSessionChanged } from "@/lib/ipc";
 import type { Session } from "@/types";
 import { SessionRow } from "./SessionRow";
 import { LaunchDialog } from "./LaunchDialog";
 import { EmptyState } from "./EmptyState";
 
-export function Dashboard() {
+export function Dashboard({
+  onOpenSettings,
+  launchOpen,
+  setLaunchOpen,
+}: {
+  onOpenSettings: () => void;
+  launchOpen: boolean;
+  setLaunchOpen: (v: boolean) => void;
+}) {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [open, setOpen] = useState(false);
 
   const refresh = useCallback(() => {
     listSessions()
@@ -29,19 +37,25 @@ export function Dashboard() {
   }, [refresh]);
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="bg-background text-foreground">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
         <div className="font-semibold">FastClaude</div>
         <button
-          onClick={() => setOpen(true)}
+          onClick={() => setLaunchOpen(true)}
           className="ml-auto px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm"
         >
           + Launch new session
         </button>
+        <button
+          onClick={onOpenSettings}
+          className="px-3 py-1.5 rounded bg-secondary text-secondary-foreground text-sm"
+        >
+          Settings
+        </button>
       </div>
-      <div className="p-4">
+      <div className="p-4 min-h-[60vh]">
         {sessions.length === 0 ? (
-          <EmptyState onLaunch={() => setOpen(true)} />
+          <EmptyState onLaunch={() => setLaunchOpen(true)} />
         ) : (
           <>
             <div className="text-xs text-muted-foreground mb-2">
@@ -55,7 +69,7 @@ export function Dashboard() {
           </>
         )}
       </div>
-      <LaunchDialog open={open} onOpenChange={setOpen} onLaunched={refresh} />
+      <LaunchDialog open={launchOpen} onOpenChange={setLaunchOpen} onLaunched={refresh} />
     </div>
   );
 }

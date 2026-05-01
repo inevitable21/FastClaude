@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Session, RecentProject, AppConfig } from "@/types";
+import type { Session, RecentProject, AppConfig, UsageSummary } from "@/types";
 
 export async function listSessions(): Promise<Session[]> {
   return invoke<Session[]>("list_sessions");
@@ -30,6 +30,22 @@ export async function getConfig(): Promise<AppConfig> {
   return invoke<AppConfig>("get_config");
 }
 
+export async function setConfig(cfg: AppConfig): Promise<void> {
+  return invoke<void>("set_config", { cfg });
+}
+
+export async function getUsageSummary(since: number): Promise<UsageSummary> {
+  return invoke<UsageSummary>("get_usage_summary", { since });
+}
+
 export async function onSessionChanged(handler: () => void): Promise<UnlistenFn> {
   return listen("session-changed", () => handler());
+}
+
+export async function onUsageUpdated(handler: () => void): Promise<UnlistenFn> {
+  return listen("usage-updated", () => handler());
+}
+
+export async function onHotkeyFired(handler: () => void): Promise<UnlistenFn> {
+  return listen("hotkey-fired", () => handler());
 }

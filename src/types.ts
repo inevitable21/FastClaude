@@ -36,3 +36,11 @@ export interface AppConfig {
     { input: number; output: number; cache_read: number; cache_write: number }
   >;
 }
+
+export interface UsageSummary {
+  tokens_in: number;
+  tokens_out: number;
+  tokens_cache_read: number;
+  tokens_cache_write: number;
+  cost_usd: number;
+}
