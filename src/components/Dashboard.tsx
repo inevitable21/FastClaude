@@ -67,7 +67,7 @@ export function Dashboard({
           onClick={onOpenHistory}
           title="History"
           aria-label="History"
-          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
         >
           <HistoryIcon className="h-4 w-4" />
         </button>
@@ -75,7 +75,7 @@ export function Dashboard({
           onClick={onOpenSettings}
           title="Settings"
           aria-label="Settings"
-          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
         >
           <SettingsIcon className="h-4 w-4" />
         </button>
