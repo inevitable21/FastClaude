@@ -30,7 +30,9 @@ jobs:
         run: |
           $version = '${{ github.ref_name }}'.TrimStart('v')
           $msi = Get-ChildItem 'src-tauri/target/release/bundle/msi/*.msi' | Select-Object -First 1
-          $sig = Get-Content "$($msi.FullName).sig" -Raw
+          # Trim trailing newline minisign appends — the updater's signature
+          # verification rejects any whitespace in the field.
+          $sig = (Get-Content "$($msi.FullName).sig" -Raw).Trim()
           $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($msi.Name)"
           $manifest = [ordered]@{
             version   = $version

@@ -213,13 +213,15 @@ pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
     let update = updater
         .check()
         .await
-        .map_err(|e| crate::error::AppError::Other(format!("update check failed: {e}")))?;
-    if let Some(update) = update {
-        update
-            .download_and_install(|_chunk, _total| {}, || {})
-            .await
-            .map_err(|e| crate::error::AppError::Other(format!("install failed: {e}")))?;
-        app.restart();
-    }
-    Ok(())
+        .map_err(|e| crate::error::AppError::Other(format!("update check failed: {e}")))?
+        .ok_or_else(|| {
+            crate::error::AppError::Other(
+                "no update available — the banner may be stale; close it and try again later".into(),
+            )
+        })?;
+    update
+        .download_and_install(|_chunk, _total| {}, || {})
+        .await
+        .map_err(|e| crate::error::AppError::Other(format!("install failed: {e}")))?;
+    app.restart();
 }

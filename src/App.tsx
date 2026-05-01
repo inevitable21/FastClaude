@@ -33,7 +33,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <UpdateBanner />
+      {view !== "onboarding" && <UpdateBanner />}
       <div className="flex-1 flex flex-col">
         {view === "onboarding" ? (
           <Onboarding onDone={() => setView("dashboard")} />
