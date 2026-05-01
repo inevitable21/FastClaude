@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod recent_projects;
 pub mod session_registry;
 
 // Modules added incrementally per plan task. The Tauri-facing run() lives
