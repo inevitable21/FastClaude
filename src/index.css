@@ -129,6 +129,13 @@
   backdrop-filter: blur(20px) saturate(140%);
 }
 
+/* Primary gradient — used by Launch / primary action buttons.
+   Light theme overrides --primary-from/--primary-to to the same value so the
+   button collapses to a solid color. */
+.btn-primary-gradient {
+  background: linear-gradient(180deg, var(--primary-from), var(--primary-to));
+}
+
 /* In light theme, glass panels collapse to solid panels (no blur) */
 :root:not(.dark) .glass-panel,
 :root:not(.dark) .glass-panel-strong {
