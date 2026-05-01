@@ -6,6 +6,7 @@ import { History } from "@/components/History";
 import { Toaster } from "@/components/ui/toaster";
 import { onHotkeyFired, getFirstRun } from "@/lib/ipc";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { AuroraBackground } from "@/components/AuroraBackground";
 
 type View = "dashboard" | "settings" | "onboarding" | "history";
 
@@ -43,25 +44,28 @@ export default function App() {
   if (view === null) return null;
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
-      {view !== "onboarding" && <UpdateBanner />}
-      <div className="flex-1 flex flex-col">
-        {view === "onboarding" ? (
-          <Onboarding onDone={() => setView("dashboard")} />
-        ) : view === "dashboard" ? (
-          <Dashboard
-            onOpenSettings={() => setView("settings")}
-            onOpenHistory={() => setView("history")}
-            launchOpen={launchOpen}
-            setLaunchOpen={setLaunchOpen}
-          />
-        ) : view === "history" ? (
-          <History onBack={() => setView("dashboard")} />
-        ) : (
-          <Settings onBack={() => setView("dashboard")} />
-        )}
+    <>
+      <AuroraBackground />
+      <div className="min-h-screen flex flex-col bg-background text-foreground relative">
+        {view !== "onboarding" && <UpdateBanner />}
+        <div className="flex-1 flex flex-col">
+          {view === "onboarding" ? (
+            <Onboarding onDone={() => setView("dashboard")} />
+          ) : view === "dashboard" ? (
+            <Dashboard
+              onOpenSettings={() => setView("settings")}
+              onOpenHistory={() => setView("history")}
+              launchOpen={launchOpen}
+              setLaunchOpen={setLaunchOpen}
+            />
+          ) : view === "history" ? (
+            <History onBack={() => setView("dashboard")} />
+          ) : (
+            <Settings onBack={() => setView("dashboard")} />
+          )}
+        </div>
+        <Toaster />
       </div>
-      <Toaster />
-    </div>
+    </>
   );
 }
