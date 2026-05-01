@@ -136,6 +136,16 @@
   background: linear-gradient(180deg, var(--primary-from), var(--primary-to));
 }
 
+/* Input/recessed-well fill — darker than the surrounding panel on dark theme
+   so inputs read as wells rather than light pop-outs; subtle gray on light. */
+.input-fill {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+:root:not(.dark) .input-fill {
+  background: rgba(0, 0, 0, 0.04);
+}
+
 /* In light theme, glass panels collapse to solid panels (no blur) */
 :root:not(.dark) .glass-panel,
 :root:not(.dark) .glass-panel-strong {
