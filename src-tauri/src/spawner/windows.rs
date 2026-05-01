@@ -58,8 +58,11 @@ const HOST_NAMES: &[&str] = &[
 ];
 
 /// Build the argv (after the executable) passed to Windows Terminal for a
-/// given spawn request. Pure function so we can unit-test argv shape — and
-/// so Task 4 can add a `--title` flag with TDD.
+/// given spawn request. Pure function so we can unit-test argv shape.
+///
+/// Argv order matters for wt: global flags (`-w`) come first, then per-tab
+/// flags (`-d`, `--title`), then the command. Putting `--title` ahead of
+/// `-w new` makes wt drop the rest and the spawned cmd never runs.
 pub(crate) fn build_wt_argv(req: &SpawnRequest) -> Vec<String> {
     let project_name = std::path::Path::new(&req.project_dir)
         .file_name()
@@ -69,12 +72,12 @@ pub(crate) fn build_wt_argv(req: &SpawnRequest) -> Vec<String> {
     let claude_cmd = build_claude_command(&req.model, req.prompt.as_deref());
     let claude_args = shlex::split(&claude_cmd).unwrap_or_default();
     let mut argv: Vec<String> = vec![
-        "--title".into(),
-        format!("FastClaude: {project_name}"),
         "-w".into(),
         "new".into(),
         "-d".into(),
         req.project_dir.clone(),
+        "--title".into(),
+        format!("FastClaude: {project_name}"),
         "cmd.exe".into(),
         "/K".into(),
     ];
@@ -308,12 +311,13 @@ mod tests {
     #[test]
     fn build_wt_argv_preserves_existing_shape() {
         let argv = build_wt_argv(&req("C:\\proj"));
-        // After the --title <label> prefix:
-        let core = &argv[2..];
-        assert_eq!(&core[0..6], &["-w", "new", "-d", "C:\\proj", "cmd.exe", "/K"]);
-        assert!(core.iter().any(|a| a.contains("claude")));
-        assert!(core.iter().any(|a| a.contains("--model")));
-        assert!(core.iter().any(|a| a == "claude-opus-4-7"));
+        // Global flags first, then per-tab flags, then the command.
+        assert_eq!(&argv[0..4], &["-w", "new", "-d", "C:\\proj"]);
+        assert_eq!(&argv[4..6], &["--title", "FastClaude: proj"]);
+        assert_eq!(&argv[6..8], &["cmd.exe", "/K"]);
+        assert!(argv.iter().any(|a| a.contains("claude")));
+        assert!(argv.iter().any(|a| a.contains("--model")));
+        assert!(argv.iter().any(|a| a == "claude-opus-4-7"));
     }
 
     #[test]
