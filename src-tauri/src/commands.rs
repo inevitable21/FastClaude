@@ -61,6 +61,15 @@ pub fn launch_session(
 #[tauri::command]
 pub fn kill_session(app: tauri::AppHandle, state: State<'_, AppState>, id: String) -> AppResult<()> {
     let s = state.registry.get(&id)?;
+    // First try to close the terminal window politely via WM_CLOSE on the HWND
+    // we captured at spawn time. This makes wt and conhost shut down their
+    // window without us having to TerminateProcess things.
+    if let Some(handle_str) = s.terminal_window_handle.as_deref() {
+        if let Ok(hwnd_isize) = handle_str.parse::<isize>() {
+            close_window_handle(hwnd_isize);
+        }
+    }
+    // Backstop: kill the process chain too in case WM_CLOSE was ignored.
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
@@ -72,6 +81,18 @@ pub fn kill_session(app: tauri::AppHandle, state: State<'_, AppState>, id: Strin
     let _ = app.emit("session-changed", &id);
     Ok(())
 }
+
+#[cfg(target_os = "windows")]
+fn close_window_handle(hwnd_isize: isize) {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    unsafe {
+        let _ = PostMessageW(hwnd_isize as HWND, WM_CLOSE, WPARAM::default(), LPARAM::default());
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn close_window_handle(_hwnd_isize: isize) {}
 
 /// Walk up the parent chain killing every process until we hit a host or
 /// system-critical process. This closes our specific terminal tab/window

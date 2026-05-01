@@ -12,8 +12,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 pub struct WinFocus;
 
 impl WindowFocus for WinFocus {
-    fn focus(&self, pid: u32, _handle: Option<&str>) -> AppResult<()> {
-        let hwnd = find_window_for_pid(pid)
+    fn focus(&self, pid: u32, handle: Option<&str>) -> AppResult<()> {
+        // Prefer the HWND captured at spawn time — it points at the exact
+        // window we created, no PID-to-window guesswork required.
+        let hwnd = handle
+            .and_then(|h| h.parse::<isize>().ok())
+            .map(HWND)
+            .or_else(|| find_window_for_pid(pid))
             .or_else(|| find_window_for_ancestor(pid))
             .ok_or_else(|| {
                 AppError::Focus(format!(

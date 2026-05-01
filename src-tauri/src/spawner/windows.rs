@@ -1,28 +1,40 @@
 use super::{SpawnRequest, SpawnResult, Spawner};
 use crate::error::{AppError, AppResult};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+};
 
 pub struct WindowsSpawner;
 
 #[derive(Debug, Clone)]
 enum TerminalChoice {
-    /// Windows Terminal — `wt.exe -d <dir> cmd.exe /K <cmd>`. The cmd /K shell
-    /// stays alive even if claude exits, so the user sees errors and we have a
-    /// stable shell PID to track.
+    /// Windows Terminal — `wt.exe -w new -d <dir> cmd.exe /K <cmd>`. `-w new`
+    /// forces a fresh top-level window so each session has its own HWND we can
+    /// close on Kill without affecting the user's other tabs.
     WindowsTerminal(PathBuf),
     /// cmd.exe fallback — `cmd.exe /C start cmd.exe /K <cmd>`, run with cwd set.
+    /// Each invocation gets its own console window owned by conhost.exe.
     Cmd,
-    /// Explicit user-supplied program — args are `<dir> cmd.exe /K <cmd>` style.
+    /// Explicit user-supplied program — args mirror Windows Terminal style.
     Custom(PathBuf),
 }
 
-/// Process names we never want to track as a session — these are launchers,
-/// hosts, or the WindowsTerminal application itself, not the running shell.
+/// Process names we never want to track as the session leaf.
 const BLOCKED_NAMES: &[&str] = &[
     "wt.exe",
+    "windowsterminal.exe",
+    "openconsole.exe",
+    "conhost.exe",
+];
+
+/// Process names that own the visible terminal window we want to find.
+const HOST_NAMES: &[&str] = &[
     "windowsterminal.exe",
     "openconsole.exe",
     "conhost.exe",
@@ -36,17 +48,16 @@ impl Spawner for WindowsSpawner {
 
         let mut cmd = match &choice {
             TerminalChoice::WindowsTerminal(path) => {
-                // wt.exe -d <dir> cmd.exe /K claude --model X [prompt]
+                // -w new forces a new top-level window so each session is its
+                // own HWND and Kill can close just this window.
                 let mut c = Command::new(path);
-                c.args(["-d", &req.project_dir, "cmd.exe", "/K"]);
+                c.args(["-w", "new", "-d", &req.project_dir, "cmd.exe", "/K"]);
                 for tok in &claude_args {
                     c.arg(tok);
                 }
                 c
             }
             TerminalChoice::Cmd => {
-                // `start` opens a new window; outer cmd.exe exits, inner one keeps
-                // the window alive via /K so user sees claude's errors.
                 let inner = format!("start \"FastClaude\" cmd.exe /K {claude_cmd}");
                 let mut c = Command::new("cmd.exe");
                 c.args(["/C", &inner]);
@@ -55,7 +66,7 @@ impl Spawner for WindowsSpawner {
             }
             TerminalChoice::Custom(path) => {
                 let mut c = Command::new(path);
-                c.args(["-d", &req.project_dir, "cmd.exe", "/K"]);
+                c.args(["-w", "new", "-d", &req.project_dir, "cmd.exe", "/K"]);
                 for tok in &claude_args {
                     c.arg(tok);
                 }
@@ -65,6 +76,10 @@ impl Spawner for WindowsSpawner {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+
+        // Snapshot existing host-window HWNDs *before* spawn so we can identify
+        // the one our launch creates.
+        let pre_hwnds = enumerate_host_windows();
 
         let spawn_time = chrono::Utc::now().timestamp() as u64;
         let _child = cmd.spawn().map_err(|e| {
@@ -79,10 +94,13 @@ impl Spawner for WindowsSpawner {
         let claude_pid = wait_for_claude(&req.project_dir, spawn_time, Duration::from_secs(10))?;
         let terminal_pid = parent_pid_of(claude_pid).unwrap_or(claude_pid);
 
+        // Wait briefly for the new window to appear and grab its HWND.
+        let new_hwnd = wait_for_new_host_window(&pre_hwnds, Duration::from_secs(3));
+
         Ok(SpawnResult {
             claude_pid: claude_pid as i64,
             terminal_pid: terminal_pid as i64,
-            terminal_window_handle: None,
+            terminal_window_handle: new_hwnd.map(|h| h.0.to_string()),
         })
     }
 }
@@ -127,18 +145,6 @@ fn build_claude_command(model: &str, prompt: Option<&str>) -> String {
     }
 }
 
-/// Find the shell process that hosts our newly-launched claude session.
-///
-/// Strategy: every candidate process must have started at or after `spawn_time`
-/// AND have its name/exe/cmdline mention "claude". We exclude known launcher
-/// and host names (wt.exe, openconsole, conhost, WindowsTerminal) because
-/// those are short-lived launchers (wt.exe) or shared hosts that don't represent
-/// the session. Among the remaining matches we pick the most recently started,
-/// which is reliably the leaf process.
-///
-/// `project_dir` is used only for the error message — sysinfo on Windows can't
-/// reliably read the cwd of processes outside our session, so cwd is no longer
-/// part of the filter.
 fn wait_for_claude(project_dir: &str, spawn_time: u64, deadline: Duration) -> AppResult<u32> {
     let start = Instant::now();
     let mut sys = System::new_with_specifics(
@@ -191,4 +197,59 @@ fn parent_pid_of(pid: u32) -> Option<u32> {
     sys.process(Pid::from_u32(pid))
         .and_then(|p| p.parent())
         .map(|pp| pp.as_u32())
+}
+
+/// Enumerate all visible top-level windows whose owning process is one of
+/// the known terminal-host names.
+fn enumerate_host_windows() -> HashSet<isize> {
+    let sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+    );
+    let host_pids: HashSet<u32> = sys
+        .processes()
+        .iter()
+        .filter(|(_, p)| HOST_NAMES.iter().any(|h| p.name().to_lowercase() == *h))
+        .map(|(pid, _)| pid.as_u32())
+        .collect();
+
+    struct State {
+        host_pids: HashSet<u32>,
+        hwnds: HashSet<isize>,
+    }
+    extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        unsafe {
+            let st = &mut *(lparam.0 as *mut State);
+            if !IsWindowVisible(hwnd).as_bool() {
+                return BOOL(1);
+            }
+            let mut wpid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut wpid));
+            if st.host_pids.contains(&wpid) {
+                st.hwnds.insert(hwnd.0 as isize);
+            }
+            BOOL(1)
+        }
+    }
+    let mut state = State {
+        host_pids,
+        hwnds: HashSet::new(),
+    };
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut state as *mut _ as isize));
+    }
+    state.hwnds
+}
+
+fn wait_for_new_host_window(pre: &HashSet<isize>, deadline: Duration) -> Option<HWND> {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        let now = enumerate_host_windows();
+        let new: Vec<isize> = now.difference(pre).copied().collect();
+        if !new.is_empty() {
+            // If multiple new windows appeared, pick any — they're all ours.
+            return Some(HWND(new[0]));
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    None
 }
