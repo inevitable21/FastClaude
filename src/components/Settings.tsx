@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
-import { getConfig, setConfig } from "@/lib/ipc";
+import { getConfig, setConfig, checkForUpdate } from "@/lib/ipc";
 import type { AppConfig } from "@/types";
 
 export function Settings({ onBack }: { onBack: () => void }) {
@@ -14,6 +14,20 @@ export function Settings({ onBack }: { onBack: () => void }) {
   }, []);
 
   if (!draft) return <div className="p-8">Loading...</div>;
+
+  async function checkUpdates() {
+    try {
+      const u = await checkForUpdate();
+      if (u) {
+        toast({ title: `FastClaude ${u.version} available`, description: "Restart from the banner to install." });
+      } else {
+        toast({ title: "You're up to date" });
+      }
+    } catch (e: unknown) {
+      const msg = typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e);
+      toast({ title: "Update check failed", description: msg, variant: "destructive" });
+    }
+  }
 
   async function save() {
     if (!draft) return;
@@ -70,14 +84,14 @@ export function Settings({ onBack }: { onBack: () => void }) {
           }
         )}
         <div className="pt-4 flex gap-2 justify-end">
+          <Button variant="ghost" onClick={checkUpdates}>Check for updates</Button>
           <Button variant="ghost" onClick={onBack}>
             Cancel
           </Button>
           <Button onClick={save}>Save</Button>
         </div>
         <p className="text-xs text-muted-foreground pt-4">
-          Hotkey changes take effect after restart. Per-model pricing is editable
-          by hand in <code>%APPDATA%/FastClaude/config.json</code>.
+          Hotkey changes take effect after restart.
         </p>
       </div>
     </div>

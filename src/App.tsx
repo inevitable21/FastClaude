@@ -4,6 +4,7 @@ import { Settings } from "@/components/Settings";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui/toaster";
 import { onHotkeyFired, getFirstRun } from "@/lib/ipc";
+import { UpdateBanner } from "@/components/UpdateBanner";
 
 type View = "dashboard" | "settings" | "onboarding";
 
@@ -32,6 +33,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
+      <UpdateBanner />
       <div className="flex-1 flex flex-col">
         {view === "onboarding" ? (
           <Onboarding onDone={() => setView("dashboard")} />
