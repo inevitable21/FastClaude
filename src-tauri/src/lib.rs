@@ -1,3 +1,4 @@
+pub mod config;
 pub mod error;
 
 // Modules added incrementally per plan task. The Tauri-facing run() lives
