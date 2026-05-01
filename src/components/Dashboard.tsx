@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { useState } from "react";
 import { Plus, History as HistoryIcon, Settings as SettingsIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { listSessions, onSessionChanged, getConfig } from "@/lib/ipc";
 import type { Session } from "@/types";
 import { SessionRow } from "./SessionRow";
@@ -52,18 +53,16 @@ export function Dashboard({
         <div className="flex items-center gap-2.5 font-semibold tracking-tight">
           <div
             aria-hidden
-            className="h-[22px] w-[22px] rounded-md shadow-[0_0_12px_rgba(217,119,87,.4)] btn-primary-gradient"
+            className="h-[22px] w-[22px] rounded-md shadow-[0_0_12px_rgba(217,119,87,.4)]"
+            style={{ background: "linear-gradient(135deg,#E8825E,#C46141)" }}
           />
           FastClaude
         </div>
         <div className="flex-1" />
-        <button
-          onClick={() => setLaunchOpen(true)}
-          className="btn-primary-gradient inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-semibold text-primary-foreground shadow-[0_8px_24px_rgba(217,119,87,.32),inset_0_1px_0_rgba(255,255,255,.18)] hover:brightness-110 transition"
-        >
+        <Button onClick={() => setLaunchOpen(true)}>
           <Plus className="h-4 w-4" />
           Launch new session
-        </button>
+        </Button>
         <button
           onClick={onOpenHistory}
           title="History"

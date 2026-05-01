@@ -73,7 +73,7 @@ export function SessionRow({
       className="flex items-center gap-3 rounded-lg glass-panel p-3 transition-colors hover:border-border-strong animate-row-in"
       style={{ animationDelay: `${index * 70}ms` }}
     >
-      <div className={`h-2 w-2 rounded-full flex-shrink-0 ${dotClass}`} />
+      <div aria-hidden className={`h-2 w-2 rounded-full flex-shrink-0 ${dotClass}`} />
       <div className="flex-1 min-w-0">
         <div className="font-semibold text-sm truncate">{projectName}</div>
         <div className="text-xs text-muted-foreground truncate font-mono">{session.project_dir}</div>
