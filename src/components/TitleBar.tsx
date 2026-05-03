@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useState } from "react";
 import { ArrowLeft, Minus, Square, X, Copy } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-type View = "dashboard" | "settings" | "history" | "onboarding";
+export type View = "dashboard" | "settings" | "history" | "onboarding";
 
 const TITLES: Record<View, string> = {
   dashboard: "FastClaude",

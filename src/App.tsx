@@ -7,8 +7,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { onHotkeyFired, getFirstRun } from "@/lib/ipc";
 import { UpdateBanner } from "@/components/UpdateBanner";
 import { AuroraBackground } from "@/components/AuroraBackground";
-
-type View = "dashboard" | "settings" | "onboarding" | "history";
+import { TitleBar, BackButton, type View } from "@/components/TitleBar";
+import { DashboardActions } from "@/components/DashboardActions";
 
 export default function App() {
   const [view, setView] = useState<View | null>(null);
@@ -21,9 +21,6 @@ export default function App() {
           setView("onboarding");
         } else {
           setView("dashboard");
-          // Default to opening Launch on startup so the user can pick a
-          // recent and hit Enter — matches the hotkey workflow without
-          // requiring them to click first.
           setLaunchOpen(true);
         }
       })
@@ -43,10 +40,22 @@ export default function App() {
 
   if (view === null) return null;
 
+  const rightActions =
+    view === "dashboard" ? (
+      <DashboardActions
+        onLaunch={() => setLaunchOpen(true)}
+        onOpenHistory={() => setView("history")}
+        onOpenSettings={() => setView("settings")}
+      />
+    ) : view === "settings" || view === "history" ? (
+      <BackButton onClick={() => setView("dashboard")} />
+    ) : null;
+
   return (
     <>
       <AuroraBackground />
       <div className="min-h-screen flex flex-col text-foreground relative z-10">
+        <TitleBar view={view} rightActions={rightActions} />
         {view !== "onboarding" && <UpdateBanner />}
         <div className="flex-1 flex flex-col">
           {view === "onboarding" ? (
