@@ -23,6 +23,7 @@ export interface RecentProject {
   decoded_path: string;
   encoded_name: string;
   mtime: number;
+  last_launched_at: number | null;
 }
 
 export interface AppConfig {

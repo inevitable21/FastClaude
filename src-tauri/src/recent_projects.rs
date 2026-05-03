@@ -1,5 +1,7 @@
 use crate::error::AppResult;
+use crate::session_registry::normalize_project_dir;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -7,6 +9,10 @@ pub struct RecentProject {
     pub decoded_path: String,
     pub encoded_name: String,
     pub mtime: i64,
+    /// Most recent FastClaude launch into this folder (epoch seconds), or
+    /// `None` if the user has never launched a session here. Folders are
+    /// sorted by this descending so "what I last actually used" floats up.
+    pub last_launched_at: Option<i64>,
 }
 
 /// Best-effort decode of Claude's path-encoded folder name back to a real path.
@@ -36,7 +42,11 @@ fn windows_drive_prefix(name: &str) -> Option<&str> {
     }
 }
 
-pub fn list(claude_root: &Path, limit: usize) -> AppResult<Vec<RecentProject>> {
+pub fn list(
+    claude_root: &Path,
+    limit: usize,
+    launches: &HashMap<String, i64>,
+) -> AppResult<Vec<RecentProject>> {
     let projects_dir = claude_root.join("projects");
     if !projects_dir.exists() {
         return Ok(Vec::new());
@@ -54,13 +64,21 @@ pub fn list(claude_root: &Path, limit: usize) -> AppResult<Vec<RecentProject>> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
+        let decoded_path = decode_name(&name);
+        let last_launched_at = launches.get(&normalize_project_dir(&decoded_path)).copied();
         out.push(RecentProject {
-            decoded_path: decode_name(&name),
+            decoded_path,
             encoded_name: name,
             mtime,
+            last_launched_at,
         });
     }
-    out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    // Primary: last FastClaude launch (Some > None). Tiebreak: dir mtime.
+    out.sort_by(|a, b| {
+        b.last_launched_at
+            .cmp(&a.last_launched_at)
+            .then_with(|| b.mtime.cmp(&a.mtime))
+    });
     out.truncate(limit);
     Ok(out)
 }
@@ -101,24 +119,64 @@ mod tests {
     }
 
     #[test]
-    fn lists_decoded_paths_sorted_by_mtime() {
+    fn falls_back_to_mtime_when_no_launches_recorded() {
         let dir = fixture();
-        let recents = list(dir.path(), 10).unwrap();
+        let recents = list(dir.path(), 10, &HashMap::new()).unwrap();
         assert_eq!(recents.len(), 4);
         assert_eq!(recents[0].decoded_path, "E:/newest");
     }
 
     #[test]
+    fn launched_folder_floats_above_newer_mtime() {
+        // FastClaude was last launched in the OLDEST-mtime folder; it should
+        // still appear first because the user actually used it.
+        let dir = fixture();
+        let mut launches = HashMap::new();
+        launches.insert(
+            normalize_project_dir("C:/GitProjects/FastClaude"),
+            2_000_000_000,
+        );
+        let recents = list(dir.path(), 10, &launches).unwrap();
+        assert_eq!(recents[0].decoded_path, "C:/GitProjects/FastClaude");
+        assert_eq!(recents[0].last_launched_at, Some(2_000_000_000));
+        // Never-launched folders fall back to mtime ordering after.
+        assert_eq!(recents[1].decoded_path, "E:/newest");
+    }
+
+    #[test]
+    fn most_recent_launch_wins_among_launched_folders() {
+        let dir = fixture();
+        let mut launches = HashMap::new();
+        launches.insert(normalize_project_dir("C:/GitProjects/FastClaude"), 100);
+        launches.insert(normalize_project_dir("D:/projects/api"), 500);
+        let recents = list(dir.path(), 10, &launches).unwrap();
+        assert_eq!(recents[0].decoded_path, "D:/projects/api");
+        assert_eq!(recents[1].decoded_path, "C:/GitProjects/FastClaude");
+    }
+
+    #[test]
+    fn launch_lookup_is_case_and_slash_insensitive() {
+        let dir = fixture();
+        let mut launches = HashMap::new();
+        // User typed it backslashed and lowercased — should still match the
+        // forward-slashed decoded path.
+        launches.insert(normalize_project_dir(r"c:\gitprojects\fastclaude"), 9_999);
+        let recents = list(dir.path(), 10, &launches).unwrap();
+        assert_eq!(recents[0].decoded_path, "C:/GitProjects/FastClaude");
+        assert_eq!(recents[0].last_launched_at, Some(9_999));
+    }
+
+    #[test]
     fn limit_truncates() {
         let dir = fixture();
-        let recents = list(dir.path(), 2).unwrap();
+        let recents = list(dir.path(), 2, &HashMap::new()).unwrap();
         assert_eq!(recents.len(), 2);
     }
 
     #[test]
     fn missing_projects_dir_returns_empty() {
         let dir = TempDir::new().unwrap();
-        let recents = list(dir.path(), 10).unwrap();
+        let recents = list(dir.path(), 10, &HashMap::new()).unwrap();
         assert!(recents.is_empty());
     }
 
