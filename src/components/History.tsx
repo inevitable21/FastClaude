@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -59,7 +59,7 @@ interface Group {
   totalTokensOut: number;
 }
 
-export function History({ onBack }: { onBack: () => void }) {
+export function History({ onBack: _onBack }: { onBack: () => void }) {
   const { toast } = useToast();
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
@@ -173,29 +173,6 @@ export function History({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="text-foreground">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background/55 backdrop-blur-xl">
-        <button
-          onClick={onBack}
-          aria-label="Back"
-          title="Back"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <div className="font-semibold tracking-tight">History</div>
-        <div className="flex-1" />
-        {totalSessions > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setPendingDelete({ kind: "all" })}
-            className="text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Clear all
-          </Button>
-        )}
-      </div>
       <div className="p-4 min-h-[60vh]">
         {sessions === null ? (
           <div className="text-sm text-muted-foreground">Loading...</div>
@@ -205,8 +182,22 @@ export function History({ onBack }: { onBack: () => void }) {
           </div>
         ) : (
           <div className="space-y-2">
-            <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-3">
-              {totalSessions} ended session{totalSessions === 1 ? "" : "s"} across {groups.length} folder{groups.length === 1 ? "" : "s"}
+            <div className="flex items-center mb-3">
+              <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                {totalSessions} ended session{totalSessions === 1 ? "" : "s"} across {groups.length} folder{groups.length === 1 ? "" : "s"}
+              </div>
+              <div className="flex-1" />
+              {totalSessions > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPendingDelete({ kind: "all" })}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Clear all
+                </Button>
+              )}
             </div>
             {groups.map((g, gi) => {
               const open = openGroups.has(g.key);
