@@ -20,6 +20,10 @@ pub struct Config {
     /// overridden in the LaunchDialog).
     #[serde(default)]
     pub default_extra_args: String,
+    /// Default prompt sent to claude on launch (empty = don't pass).
+    /// LaunchDialog pre-fills its prompt textarea from this value.
+    #[serde(default)]
+    pub default_prompt: String,
 }
 
 impl Default for Config {
@@ -32,6 +36,7 @@ impl Default for Config {
             default_effort: String::new(),
             default_permission_mode: String::new(),
             default_extra_args: String::new(),
+            default_prompt: String::new(),
         }
     }
 }
@@ -113,5 +118,19 @@ mod tests {
         .unwrap();
         let (cfg, _) = load(&path).unwrap();
         assert_eq!(cfg.default_model, "claude-opus-4-7");
+    }
+
+    #[test]
+    fn load_defaults_prompt_to_empty_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(
+            &path,
+            br#"{"terminal_program":"auto","default_model":"claude-opus-4-7",
+                "hotkey":"Ctrl+Shift+C","idle_threshold_seconds":300}"#,
+        )
+        .unwrap();
+        let (cfg, _) = load(&path).unwrap();
+        assert_eq!(cfg.default_prompt, "");
     }
 }

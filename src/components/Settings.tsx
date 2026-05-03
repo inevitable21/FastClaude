@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Sun, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -177,6 +178,13 @@ export function Settings({ onBack }: { onBack: () => void }) {
               value={draft.default_extra_args}
               onChange={(e) => setDraft({ ...draft, default_extra_args: e.target.value })}
               placeholder='e.g. --name "MyAgent" --no-session-persistence'
+            />
+          </Field>
+          <Field label="Default prompt (sent to claude on launch)">
+            <Textarea
+              value={draft.default_prompt}
+              onChange={(e) => setDraft({ ...draft, default_prompt: e.target.value })}
+              placeholder="e.g. Review the latest changes and run all tests"
             />
           </Field>
         </Section>

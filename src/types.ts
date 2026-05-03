@@ -34,6 +34,7 @@ export interface AppConfig {
   default_effort: string;
   default_permission_mode: string;
   default_extra_args: string;
+  default_prompt: string;
 }
 
 export interface LaunchInput {

@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -91,6 +92,7 @@ export function LaunchDialog({
         setEffort(c.default_effort);
         setPermissionMode(c.default_permission_mode);
         setExtraArgs(c.default_extra_args);
+        setPrompt(c.default_prompt);
       })
       .catch(() => {});
   }, [open]);
@@ -313,7 +315,7 @@ export function LaunchDialog({
           </div>
           <div>
             <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">Starting prompt (optional)</label>
-            <Input
+            <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="Implement X..."
