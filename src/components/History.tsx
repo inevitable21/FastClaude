@@ -59,7 +59,7 @@ interface Group {
   totalTokensOut: number;
 }
 
-export function History({ onBack: _onBack }: { onBack: () => void }) {
+export function History() {
   const { toast } = useToast();
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());

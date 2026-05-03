@@ -66,7 +66,7 @@ export default function App() {
               setLaunchOpen={setLaunchOpen}
             />
           ) : view === "history" ? (
-            <History onBack={() => setView("dashboard")} />
+            <History />
           ) : (
             <Settings onBack={() => setView("dashboard")} />
           )}
