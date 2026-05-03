@@ -1,7 +1,4 @@
-import { useCallback, useEffect } from "react";
-import { useState } from "react";
-import { Plus, History as HistoryIcon, Settings as SettingsIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useCallback, useEffect, useState } from "react";
 import { listSessions, onSessionChanged, getConfig } from "@/lib/ipc";
 import type { Session } from "@/types";
 import { SessionRow } from "./SessionRow";
@@ -9,13 +6,9 @@ import { LaunchDialog } from "./LaunchDialog";
 import { EmptyState } from "./EmptyState";
 
 export function Dashboard({
-  onOpenSettings,
-  onOpenHistory,
   launchOpen,
   setLaunchOpen,
 }: {
-  onOpenSettings: () => void;
-  onOpenHistory: () => void;
   launchOpen: boolean;
   setLaunchOpen: (v: boolean) => void;
 }) {
@@ -49,38 +42,6 @@ export function Dashboard({
 
   return (
     <div className="text-foreground">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background/55 backdrop-blur-xl">
-        <div className="flex items-center gap-2.5 font-semibold tracking-tight">
-          <img
-            src="/icon.png"
-            alt=""
-            aria-hidden
-            className="h-[22px] w-[22px] rounded-md shadow-[0_0_12px_rgba(217,119,87,.4)] flex-shrink-0"
-          />
-          FastClaude
-        </div>
-        <div className="flex-1" />
-        <Button onClick={() => setLaunchOpen(true)}>
-          <Plus className="h-4 w-4" />
-          Launch new session
-        </Button>
-        <button
-          onClick={onOpenHistory}
-          title="History"
-          aria-label="History"
-          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
-        >
-          <HistoryIcon className="h-4 w-4" />
-        </button>
-        <button
-          onClick={onOpenSettings}
-          title="Settings"
-          aria-label="Settings"
-          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
-        >
-          <SettingsIcon className="h-4 w-4" />
-        </button>
-      </div>
       <div className="p-4 min-h-[60vh]">
         {sessions.length === 0 ? (
           <EmptyState onLaunch={() => setLaunchOpen(true)} hotkey={hotkey} />

@@ -62,8 +62,6 @@ export default function App() {
             <Onboarding onDone={() => setView("dashboard")} />
           ) : view === "dashboard" ? (
             <Dashboard
-              onOpenSettings={() => setView("settings")}
-              onOpenHistory={() => setView("history")}
               launchOpen={launchOpen}
               setLaunchOpen={setLaunchOpen}
             />
