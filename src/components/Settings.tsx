@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Sun, Moon } from "lucide-react";
+import { Sun, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -112,17 +112,6 @@ export function Settings({ onBack }: { onBack: () => void }) {
 
   return (
     <div className="text-foreground">
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-background/55 backdrop-blur-xl">
-        <button
-          onClick={onBack}
-          aria-label="Back"
-          title="Back"
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-foreground/[0.04] text-foreground hover:bg-foreground/[0.08] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <div className="font-semibold tracking-tight">Settings</div>
-      </div>
       <div className="p-4 space-y-4 max-w-xl min-h-[60vh]">
         <Section title="Terminal">
           <Field label="Terminal program (or 'auto')">
