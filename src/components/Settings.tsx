@@ -97,18 +97,19 @@ export function Settings({ onBack }: { onBack: () => void }) {
     if (!draft) return;
     try {
       await setConfig(draft);
-      toast({ title: "Settings saved" });
-      if (
+      const isLockoutRisk =
         draft.launch_on_login &&
         draft.launch_mode === "hidden" &&
-        !draft.hotkey.trim()
-      ) {
+        !draft.hotkey.trim();
+      if (isLockoutRisk) {
         toast({
-          title: "Hidden mode set with no hotkey",
+          title: "Settings saved — action needed",
           description:
-            "You'll only be able to reach the window via Task Manager. Configure a hotkey in the Hotkey section.",
+            "Hidden mode is active but no hotkey is set. You'll only be able to reach the window via Task Manager.",
           variant: "destructive",
         });
+      } else {
+        toast({ title: "Settings saved" });
       }
       onBack();
     } catch (e: unknown) {
