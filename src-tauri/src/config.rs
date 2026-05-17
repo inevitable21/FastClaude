@@ -2,6 +2,20 @@ use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMode {
+    Window,
+    Minimized,
+    Hidden,
+}
+
+impl Default for LaunchMode {
+    fn default() -> Self {
+        LaunchMode::Window
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub terminal_program: String,
@@ -132,5 +146,26 @@ mod tests {
         .unwrap();
         let (cfg, _) = load(&path).unwrap();
         assert_eq!(cfg.default_prompt, "");
+    }
+
+    #[test]
+    fn launch_mode_serde_round_trip() {
+        for m in [LaunchMode::Window, LaunchMode::Minimized, LaunchMode::Hidden] {
+            let s = serde_json::to_value(&m).unwrap();
+            let back: LaunchMode = serde_json::from_value(s.clone()).unwrap();
+            assert_eq!(m, back, "round-trip failed for {:?} (serialized as {})", m, s);
+        }
+    }
+
+    #[test]
+    fn launch_mode_serializes_as_snake_case() {
+        assert_eq!(serde_json::to_string(&LaunchMode::Window).unwrap(), "\"window\"");
+        assert_eq!(serde_json::to_string(&LaunchMode::Minimized).unwrap(), "\"minimized\"");
+        assert_eq!(serde_json::to_string(&LaunchMode::Hidden).unwrap(), "\"hidden\"");
+    }
+
+    #[test]
+    fn launch_mode_default_is_window() {
+        assert_eq!(LaunchMode::default(), LaunchMode::Window);
     }
 }
