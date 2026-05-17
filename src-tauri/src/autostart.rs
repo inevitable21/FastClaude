@@ -21,9 +21,18 @@ pub fn reconcile_autostart<R: Runtime>(app: &AppHandle<R>, cfg: &Config) -> AppR
             .enable()
             .map_err(|e| AppError::Other(format!("enable autostart: {e}")))?;
     } else {
-        manager
-            .disable()
-            .map_err(|e| AppError::Other(format!("disable autostart: {e}")))?;
+        // Only disable if currently enabled. The underlying auto-launch crate
+        // raises ERROR_FILE_NOT_FOUND when deleting a non-existent registry
+        // value, which would otherwise fail every new user's first Settings
+        // save (default state: launch_on_login = false).
+        let enabled = manager
+            .is_enabled()
+            .map_err(|e| AppError::Other(format!("check autostart state: {e}")))?;
+        if enabled {
+            manager
+                .disable()
+                .map_err(|e| AppError::Other(format!("disable autostart: {e}")))?;
+        }
     }
     Ok(())
 }
