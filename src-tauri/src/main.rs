@@ -7,7 +7,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use fastclaude_lib::{
     commands::{self, AppState},
-    config, poller,
+    config, launch_args, poller,
+    autostart,
     session_registry::Registry,
     spawner, window_focus,
 };
@@ -64,6 +65,46 @@ fn main() {
                     }
                 }
                 Err(e) => eprintln!("invalid hotkey '{hotkey_str}' in config: {e}"),
+            }
+
+            // ─── Apply launch mode to the main window ─────────────────────
+            // Default window visibility is `false` (see tauri.conf.json). We
+            // either keep it hidden (autostart + Hidden mode) or show it now.
+            let launch = launch_args::parse_launch_args(std::env::args());
+            let mode = cfg_arc.lock().unwrap().launch_mode;
+            if let Some(w) = app.get_webview_window("main") {
+                use fastclaude_lib::config::LaunchMode;
+                match (launch.from_autostart, mode) {
+                    (true, LaunchMode::Hidden) => {
+                        // leave hidden; only the global hotkey will reveal it
+                    }
+                    (true, LaunchMode::Minimized) => {
+                        let _ = w.show();
+                        let _ = w.minimize();
+                    }
+                    _ => {
+                        // Manual launch, or autostart in Window mode → show normally
+                        let _ = w.show();
+                    }
+                }
+            }
+
+            // ─── Path-drift warning ────────────────────────────────────────
+            // If config says autostart is on but the OS doesn't have us
+            // registered, the most likely cause is a reinstall to a new path.
+            // Don't auto-repair — just log so the user notices on next Save.
+            #[cfg(not(debug_assertions))]
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                if cfg_arc.lock().unwrap().launch_on_login {
+                    match app.autolaunch().is_enabled() {
+                        Ok(false) => eprintln!(
+                            "autostart: config says enabled but OS registry says disabled (path drift?)"
+                        ),
+                        Ok(true) => {}
+                        Err(e) => eprintln!("autostart: is_enabled() check failed: {e}"),
+                    }
+                }
             }
 
             let app_handle = app.handle().clone();
