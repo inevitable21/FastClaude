@@ -221,6 +221,10 @@ pub fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, cfg: Config
     // Reconcile OS-level autostart BEFORE persisting. If this fails we don't
     // want a config file that says "on" while the registry says "off".
     crate::autostart::reconcile_autostart(&app, &cfg)?;
+    // NOTE: if save fails here, the OS registry was already mutated. On next
+    // launch the config file wins, so the toggle will show stale state. Not
+    // worth rolling back the registry — that call is also fallible and offers
+    // no real safety on a write-error path.
     config::save(&state.config_path, &cfg)?;
     let mut held = state.config.lock().unwrap();
     *held = cfg;
