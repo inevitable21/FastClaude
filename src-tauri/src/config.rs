@@ -2,6 +2,20 @@ use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMode {
+    Window,
+    Minimized,
+    Hidden,
+}
+
+impl Default for LaunchMode {
+    fn default() -> Self {
+        LaunchMode::Window
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     pub terminal_program: String,
@@ -20,6 +34,17 @@ pub struct Config {
     /// overridden in the LaunchDialog).
     #[serde(default)]
     pub default_extra_args: String,
+    /// Default prompt sent to claude on launch (empty = don't pass).
+    /// LaunchDialog pre-fills its prompt textarea from this value.
+    #[serde(default)]
+    pub default_prompt: String,
+    /// If true, register FastClaude to launch at Windows login.
+    #[serde(default)]
+    pub launch_on_login: bool,
+    /// How the window should appear when launched by autostart.
+    /// (Read on every boot from the loaded config.)
+    #[serde(default)]
+    pub launch_mode: LaunchMode,
 }
 
 impl Default for Config {
@@ -32,6 +57,9 @@ impl Default for Config {
             default_effort: String::new(),
             default_permission_mode: String::new(),
             default_extra_args: String::new(),
+            default_prompt: String::new(),
+            launch_on_login: false,
+            launch_mode: LaunchMode::Window,
         }
     }
 }
@@ -113,5 +141,62 @@ mod tests {
         .unwrap();
         let (cfg, _) = load(&path).unwrap();
         assert_eq!(cfg.default_model, "claude-opus-4-7");
+    }
+
+    #[test]
+    fn load_defaults_prompt_to_empty_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(
+            &path,
+            br#"{"terminal_program":"auto","default_model":"claude-opus-4-7",
+                "hotkey":"Ctrl+Shift+C","idle_threshold_seconds":300}"#,
+        )
+        .unwrap();
+        let (cfg, _) = load(&path).unwrap();
+        assert_eq!(cfg.default_prompt, "");
+    }
+
+    #[test]
+    fn launch_mode_serde_round_trip() {
+        for m in [LaunchMode::Window, LaunchMode::Minimized, LaunchMode::Hidden] {
+            let s = serde_json::to_value(&m).unwrap();
+            let back: LaunchMode = serde_json::from_value(s.clone()).unwrap();
+            assert_eq!(m, back, "round-trip failed for {:?} (serialized as {})", m, s);
+        }
+    }
+
+    #[test]
+    fn launch_mode_serializes_as_snake_case() {
+        assert_eq!(serde_json::to_string(&LaunchMode::Window).unwrap(), "\"window\"");
+        assert_eq!(serde_json::to_string(&LaunchMode::Minimized).unwrap(), "\"minimized\"");
+        assert_eq!(serde_json::to_string(&LaunchMode::Hidden).unwrap(), "\"hidden\"");
+    }
+
+    #[test]
+    fn launch_mode_default_is_window() {
+        assert_eq!(LaunchMode::default(), LaunchMode::Window);
+    }
+
+    #[test]
+    fn load_defaults_autostart_fields_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(
+            &path,
+            br#"{"terminal_program":"auto","default_model":"claude-opus-4-7",
+                "hotkey":"Ctrl+Shift+C","idle_threshold_seconds":300}"#,
+        )
+        .unwrap();
+        let (cfg, _) = load(&path).unwrap();
+        assert!(!cfg.launch_on_login, "launch_on_login must default to false");
+        assert_eq!(cfg.launch_mode, LaunchMode::Window);
+    }
+
+    #[test]
+    fn config_default_has_autostart_off() {
+        let cfg = Config::default();
+        assert!(!cfg.launch_on_login);
+        assert_eq!(cfg.launch_mode, LaunchMode::Window);
     }
 }

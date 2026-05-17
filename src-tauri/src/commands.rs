@@ -163,6 +163,38 @@ fn kill_session_chain(sys: &System, claude_pid: u32) {
 }
 
 #[tauri::command]
+pub fn delete_session(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<()> {
+    state.registry.delete(&id)?;
+    let _ = app.emit("session-changed", &id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_ended_sessions(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<usize> {
+    let n = state.registry.delete_all_ended()?;
+    let _ = app.emit("session-changed", ());
+    Ok(n)
+}
+
+#[tauri::command]
+pub fn delete_sessions(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> AppResult<usize> {
+    let n = state.registry.delete_many_ended(&ids)?;
+    let _ = app.emit("session-changed", ());
+    Ok(n)
+}
+
+#[tauri::command]
 pub fn focus_session(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let s = state.registry.get(&id)?;
     // Pass claude_pid; the focus impl walks up the parent chain to find a
@@ -173,9 +205,10 @@ pub fn focus_session(state: State<'_, AppState>, id: String) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn recent_projects(limit: usize) -> AppResult<Vec<RecentProject>> {
+pub fn recent_projects(state: State<'_, AppState>, limit: usize) -> AppResult<Vec<RecentProject>> {
     let root = recent_projects::default_claude_root()?;
-    recent_projects::list(&root, limit)
+    let launches = state.registry.last_launch_per_dir()?;
+    recent_projects::list(&root, limit, &launches)
 }
 
 #[tauri::command]
@@ -184,12 +217,17 @@ pub fn get_config(state: State<'_, AppState>) -> AppResult<Config> {
 }
 
 #[tauri::command]
-pub fn set_config(state: State<'_, AppState>, cfg: Config) -> AppResult<()> {
-    {
-        let mut held = state.config.lock().unwrap();
-        *held = cfg.clone();
-    }
+pub fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, cfg: Config) -> AppResult<()> {
+    // Reconcile OS-level autostart BEFORE persisting. If this fails we don't
+    // want a config file that says "on" while the registry says "off".
+    crate::autostart::reconcile_autostart(&app, &cfg)?;
+    // NOTE: if save fails here, the OS registry was already mutated. On next
+    // launch the config file wins, so the toggle will show stale state. Not
+    // worth rolling back the registry — that call is also fallible and offers
+    // no real safety on a write-error path.
     config::save(&state.config_path, &cfg)?;
+    let mut held = state.config.lock().unwrap();
+    *held = cfg;
     Ok(())
 }
 

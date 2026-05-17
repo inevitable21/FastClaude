@@ -6,8 +6,9 @@ import { History } from "@/components/History";
 import { Toaster } from "@/components/ui/toaster";
 import { onHotkeyFired, getFirstRun } from "@/lib/ipc";
 import { UpdateBanner } from "@/components/UpdateBanner";
-
-type View = "dashboard" | "settings" | "onboarding" | "history";
+import { AuroraBackground } from "@/components/AuroraBackground";
+import { TitleBar, BackButton, type View } from "@/components/TitleBar";
+import { DashboardActions } from "@/components/DashboardActions";
 
 export default function App() {
   const [view, setView] = useState<View | null>(null);
@@ -20,9 +21,6 @@ export default function App() {
           setView("onboarding");
         } else {
           setView("dashboard");
-          // Default to opening Launch on startup so the user can pick a
-          // recent and hit Enter — matches the hotkey workflow without
-          // requiring them to click first.
           setLaunchOpen(true);
         }
       })
@@ -42,26 +40,39 @@ export default function App() {
 
   if (view === null) return null;
 
+  const rightActions =
+    view === "dashboard" ? (
+      <DashboardActions
+        onLaunch={() => setLaunchOpen(true)}
+        onOpenHistory={() => setView("history")}
+        onOpenSettings={() => setView("settings")}
+      />
+    ) : view === "settings" || view === "history" ? (
+      <BackButton onClick={() => setView("dashboard")} />
+    ) : null;
+
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
-      {view !== "onboarding" && <UpdateBanner />}
-      <div className="flex-1 flex flex-col">
-        {view === "onboarding" ? (
-          <Onboarding onDone={() => setView("dashboard")} />
-        ) : view === "dashboard" ? (
-          <Dashboard
-            onOpenSettings={() => setView("settings")}
-            onOpenHistory={() => setView("history")}
-            launchOpen={launchOpen}
-            setLaunchOpen={setLaunchOpen}
-          />
-        ) : view === "history" ? (
-          <History onBack={() => setView("dashboard")} />
-        ) : (
-          <Settings onBack={() => setView("dashboard")} />
-        )}
+    <>
+      <AuroraBackground />
+      <div className="min-h-screen flex flex-col text-foreground relative z-10">
+        <TitleBar view={view} rightActions={rightActions} />
+        {view !== "onboarding" && <UpdateBanner />}
+        <div className="flex-1 flex flex-col">
+          {view === "onboarding" ? (
+            <Onboarding onDone={() => setView("dashboard")} />
+          ) : view === "dashboard" ? (
+            <Dashboard
+              launchOpen={launchOpen}
+              setLaunchOpen={setLaunchOpen}
+            />
+          ) : view === "history" ? (
+            <History />
+          ) : (
+            <Settings onBack={() => setView("dashboard")} />
+          )}
+        </div>
+        <Toaster />
       </div>
-      <Toaster />
-    </div>
+    </>
   );
 }

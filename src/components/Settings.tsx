@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { Sun, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -19,22 +21,69 @@ import {
   toUnset,
 } from "@/lib/launch-options";
 import type { AppConfig } from "@/types";
+import { HotkeyCapture } from "./HotkeyCapture";
+
+type Theme = "dark" | "light";
+
+function readTheme(): Theme {
+  return localStorage.getItem("fastclaude-theme") === "light" ? "light" : "dark";
+}
+
+function applyTheme(t: Theme) {
+  if (t === "dark") {
+    document.documentElement.classList.add("dark");
+    localStorage.setItem("fastclaude-theme", "dark");
+  } else {
+    document.documentElement.classList.remove("dark");
+    localStorage.setItem("fastclaude-theme", "light");
+  }
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="glass-panel rounded-xl p-4 space-y-3">
+      <div className="text-[10px] uppercase tracking-[0.12em] text-accent">{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <div className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground mb-1.5">
+        {label}
+      </div>
+      {children}
+    </label>
+  );
+}
 
 export function Settings({ onBack }: { onBack: () => void }) {
   const { toast } = useToast();
   const [draft, setDraft] = useState<AppConfig | null>(null);
+  const [theme, setTheme] = useState<Theme>(() => readTheme());
 
   useEffect(() => {
     getConfig().then(setDraft).catch(() => {});
   }, []);
 
-  if (!draft) return <div className="p-8">Loading...</div>;
+  if (!draft) return <div className="p-8 text-muted-foreground">Loading...</div>;
 
   async function checkUpdates() {
     try {
       const u = await checkForUpdate();
       if (u) {
-        toast({ title: `FastClaude ${u.version} available`, description: "Restart from the banner to install." });
+        toast({
+          title: `FastClaude ${u.version} available`,
+          description: "Restart from the banner to install.",
+        });
       } else {
         toast({ title: "You're up to date" });
       }
@@ -48,127 +97,201 @@ export function Settings({ onBack }: { onBack: () => void }) {
     if (!draft) return;
     try {
       await setConfig(draft);
-      toast({ title: "Settings saved" });
+      const isLockoutRisk =
+        draft.launch_on_login &&
+        draft.launch_mode === "hidden" &&
+        !draft.hotkey.trim();
+      if (isLockoutRisk) {
+        toast({
+          title: "Settings saved — action needed",
+          description:
+            "Hidden mode is active but no hotkey is set. You'll only be able to reach the window via Task Manager.",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Settings saved" });
+      }
       onBack();
     } catch (e: unknown) {
-      const msg =
-        typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e);
+      const msg = typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e);
       toast({ title: "Failed to save", description: msg, variant: "destructive" });
     }
   }
 
-  function field(
-    label: string,
-    value: string,
-    onChange: (v: string) => void,
-  ) {
-    return (
-      <label className="block">
-        <div className="text-xs font-medium mb-1">{label}</div>
-        <Input value={value} onChange={(e) => onChange(e.target.value)} />
-      </label>
-    );
+  function toggleTheme() {
+    const next: Theme = theme === "dark" ? "light" : "dark";
+    applyTheme(next);
+    setTheme(next);
   }
 
   return (
-    <div className="bg-background text-foreground">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
-        <button onClick={onBack} className="text-sm hover:underline">
-          ← Back
-        </button>
-        <div className="font-semibold">Settings</div>
-      </div>
+    <div className="text-foreground">
       <div className="p-4 space-y-4 max-w-xl min-h-[60vh]">
-        {field("Terminal program (or 'auto')", draft.terminal_program, (v) =>
-          setDraft({ ...draft, terminal_program: v })
-        )}
-        <label className="block">
-          <div className="text-xs font-medium mb-1">Default model</div>
-          <Select
-            value={draft.default_model}
-            onValueChange={(v) => setDraft({ ...draft, default_model: v })}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MODELS.map((m) => (
-                <SelectItem key={m} value={m}>{m}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="block">
-          <div className="text-xs font-medium mb-1">Default --effort</div>
-          <Select
-            value={toUnset(draft.default_effort)}
-            onValueChange={(v) =>
-              setDraft({ ...draft, default_effort: fromUnset(v) })
-            }
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={UNSET}>(don't pass)</SelectItem>
-              {EFFORT_OPTIONS.map((e) => (
-                <SelectItem key={e} value={e}>{e}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="block">
-          <div className="text-xs font-medium mb-1">Default --permission-mode</div>
-          <Select
-            value={toUnset(draft.default_permission_mode)}
-            onValueChange={(v) =>
-              setDraft({ ...draft, default_permission_mode: fromUnset(v) })
-            }
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={UNSET}>(don't pass)</SelectItem>
-              {PERMISSION_MODE_OPTIONS.map((m) => (
-                <SelectItem key={m} value={m}>{m}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-        <label className="block">
-          <div className="text-xs font-medium mb-1">Default extra args (free-form)</div>
-          <Input
-            value={draft.default_extra_args}
-            onChange={(e) =>
-              setDraft({ ...draft, default_extra_args: e.target.value })
-            }
-            placeholder='e.g. --name "MyAgent" --no-session-persistence'
-          />
-        </label>
-        {field("Global hotkey", draft.hotkey, (v) =>
-          setDraft({ ...draft, hotkey: v })
-        )}
-        {field(
-          "Idle threshold (seconds)",
-          String(draft.idle_threshold_seconds),
-          (v) => {
-            const n = parseInt(v, 10);
-            if (!Number.isNaN(n) && n > 0) {
-              setDraft({ ...draft, idle_threshold_seconds: n });
-            }
-          }
-        )}
-        <div className="pt-4 flex gap-2 justify-end">
+        <Section title="Terminal">
+          <Field label="Terminal program (or 'auto')">
+            <Input
+              value={draft.terminal_program}
+              onChange={(e) => setDraft({ ...draft, terminal_program: e.target.value })}
+            />
+          </Field>
+        </Section>
+
+        <Section title="Defaults">
+          <Field label="Default model">
+            <Select
+              value={draft.default_model}
+              onValueChange={(v) => setDraft({ ...draft, default_model: v })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MODELS.map((m) => (
+                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Default --effort">
+            <Select
+              value={toUnset(draft.default_effort)}
+              onValueChange={(v) => setDraft({ ...draft, default_effort: fromUnset(v) })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>(don't pass)</SelectItem>
+                {EFFORT_OPTIONS.map((e) => (
+                  <SelectItem key={e} value={e}>{e}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Default --permission-mode">
+            <Select
+              value={toUnset(draft.default_permission_mode)}
+              onValueChange={(v) =>
+                setDraft({ ...draft, default_permission_mode: fromUnset(v) })
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>(don't pass)</SelectItem>
+                {PERMISSION_MODE_OPTIONS.map((m) => (
+                  <SelectItem key={m} value={m}>{m}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Default extra args (free-form)">
+            <Input
+              value={draft.default_extra_args}
+              onChange={(e) => setDraft({ ...draft, default_extra_args: e.target.value })}
+              placeholder='e.g. --name "MyAgent" --no-session-persistence'
+            />
+          </Field>
+          <Field label="Default prompt (sent to claude on launch)">
+            <Textarea
+              value={draft.default_prompt}
+              onChange={(e) => setDraft({ ...draft, default_prompt: e.target.value })}
+              placeholder="e.g. Review the latest changes and run all tests"
+            />
+          </Field>
+        </Section>
+
+        <Section title="Hotkey">
+          <Field label="Global hotkey">
+            <HotkeyCapture
+              value={draft.hotkey}
+              onChange={(v) => setDraft({ ...draft, hotkey: v })}
+            />
+          </Field>
+          <Field label="Idle threshold (seconds)">
+            <Input
+              value={String(draft.idle_threshold_seconds)}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                if (!Number.isNaN(n) && n > 0) {
+                  setDraft({ ...draft, idle_threshold_seconds: n });
+                }
+              }}
+            />
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            Hotkey changes take effect after restart.
+          </p>
+        </Section>
+
+        <Section title="Startup">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm">Launch on login</div>
+              <div className="text-xs text-muted-foreground">
+                Start FastClaude automatically when you sign in to Windows.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-accent"
+              checked={draft.launch_on_login}
+              onChange={(e) =>
+                setDraft({ ...draft, launch_on_login: e.target.checked })
+              }
+            />
+          </div>
+          <Field label="Launch as">
+            <Select
+              value={draft.launch_mode}
+              onValueChange={(v) =>
+                setDraft({ ...draft, launch_mode: v as AppConfig["launch_mode"] })
+              }
+              disabled={!draft.launch_on_login}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="window">Window</SelectItem>
+                <SelectItem value="minimized">Minimized</SelectItem>
+                <SelectItem value="hidden">Hidden (hotkey only)</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            'Hidden' relies on your global hotkey — set one in the Hotkey section first.
+          </p>
+        </Section>
+
+        <Section title="Theme">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 text-sm text-muted-foreground">
+              Currently: <span className="text-foreground font-medium">{theme === "dark" ? "Dark (Warm Aurora)" : "Light"}</span>
+            </div>
+            <Button variant="ghost" onClick={toggleTheme}>
+              {theme === "dark" ? (
+                <>
+                  <Sun className="h-4 w-4" /> Switch to light
+                </>
+              ) : (
+                <>
+                  <Moon className="h-4 w-4" /> Switch to dark
+                </>
+              )}
+            </Button>
+          </div>
+        </Section>
+
+        <Section title="Updates">
           <Button variant="ghost" onClick={checkUpdates}>Check for updates</Button>
-          <Button variant="ghost" onClick={onBack}>
-            Cancel
-          </Button>
+        </Section>
+
+        <div className="pt-2 flex gap-2 justify-end">
+          <Button variant="ghost" onClick={onBack}>Cancel</Button>
           <Button onClick={save}>Save</Button>
         </div>
-        <p className="text-xs text-muted-foreground pt-4">
-          Hotkey changes take effect after restart.
-        </p>
       </div>
     </div>
   );

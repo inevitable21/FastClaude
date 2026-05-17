@@ -1,9 +1,23 @@
 use crate::error::{AppError, AppResult};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
+
+/// Normalize a project directory string for equality comparisons across
+/// what-the-user-typed (registry) vs. what-we-decoded-from-disk
+/// (recent_projects). Forward slashes, lowercased drive letter, no trailing
+/// slash. Windows is case-insensitive on path components but we lowercase
+/// the whole thing — ASCII paths only matter here, so this is safe enough.
+pub fn normalize_project_dir(s: &str) -> String {
+    let mut s = s.replace('\\', "/").to_lowercase();
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    s
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -153,6 +167,27 @@ impl Registry {
         self.list_where("1=1 ORDER BY started_at DESC")
     }
 
+    /// Returns map of `normalized(project_dir) -> max(started_at)` across all
+    /// sessions ever recorded. Used to rank the launch dialog's folder list by
+    /// "last time the user actually launched a session here".
+    pub fn last_launch_per_dir(&self) -> AppResult<HashMap<String, i64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT project_dir, MAX(started_at) FROM sessions GROUP BY project_dir",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let dir: String = row.get(0)?;
+            let started: i64 = row.get(1)?;
+            Ok((dir, started))
+        })?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let (dir, started) = r?;
+            out.insert(normalize_project_dir(&dir), started);
+        }
+        Ok(out)
+    }
+
     fn list_where(&self, where_clause: &str) -> AppResult<Vec<Session>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
@@ -184,6 +219,61 @@ impl Registry {
         } else {
             Err(AppError::NotFound(format!("session {id}")))
         }
+    }
+
+    /// Removes a single session row by id. Refuses to delete a session that
+    /// is still active (`ended_at IS NULL`) so we don't orphan the spawned
+    /// process — the caller should kill it first via `kill_session`.
+    pub fn delete(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "DELETE FROM sessions WHERE id = ?1 AND ended_at IS NOT NULL",
+            params![id],
+        )?;
+        if n == 0 {
+            // Distinguish "doesn't exist" from "still running" so the UI can
+            // surface a useful error if someone wires this up to an active row.
+            let exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sessions WHERE id = ?1",
+                    params![id],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            return Err(if exists {
+                AppError::Invalid(format!("session {id} is still running"))
+            } else {
+                AppError::NotFound(format!("session {id}"))
+            });
+        }
+        Ok(())
+    }
+
+    /// Bulk-deletes every ended session. Active sessions are preserved so the
+    /// dashboard keeps showing what's currently running. Returns the number of
+    /// rows removed.
+    pub fn delete_all_ended(&self) -> AppResult<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute("DELETE FROM sessions WHERE ended_at IS NOT NULL", [])?;
+        Ok(n)
+    }
+
+    /// Bulk-deletes the given ids, but only those that are already ended.
+    /// Active sessions in the list are silently skipped — this matches `delete`
+    /// rather than failing a 20-session group delete because one row happens
+    /// to still be running. Returns the count actually removed.
+    pub fn delete_many_ended(&self, ids: &[String]) -> AppResult<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "DELETE FROM sessions WHERE ended_at IS NOT NULL AND id IN ({placeholders})"
+        );
+        let params = rusqlite::params_from_iter(ids.iter());
+        let n = conn.execute(&sql, params)?;
+        Ok(n)
     }
 
     pub fn mark_ended(&self, id: &str, ended_at: i64) -> AppResult<()> {
@@ -327,6 +417,73 @@ mod tests {
     fn mark_ended_unknown_id_returns_not_found() {
         let r = make();
         assert!(matches!(r.mark_ended("nope", 1), Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn delete_removes_ended_session() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        r.mark_ended(&s.id, 9999).unwrap();
+        r.delete(&s.id).unwrap();
+        assert!(matches!(r.get(&s.id), Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn delete_refuses_running_session() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        assert!(matches!(r.delete(&s.id), Err(AppError::Invalid(_))));
+        // Row is still there.
+        assert!(r.get(&s.id).is_ok());
+    }
+
+    #[test]
+    fn delete_unknown_id_returns_not_found() {
+        let r = make();
+        assert!(matches!(r.delete("nope"), Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn delete_many_ended_skips_active_rows() {
+        let r = make();
+        let a = r.insert(new_sess("/p/a")).unwrap();
+        let b = r.insert(new_sess("/p/b")).unwrap();
+        let c = r.insert(new_sess("/p/c")).unwrap();
+        r.mark_ended(&a.id, 100).unwrap();
+        r.mark_ended(&c.id, 300).unwrap();
+        // b is still active; should be skipped, not error.
+        let removed = r
+            .delete_many_ended(&[a.id.clone(), b.id.clone(), c.id.clone()])
+            .unwrap();
+        assert_eq!(removed, 2);
+        let all = r.list_all().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].project_dir, "/p/b");
+    }
+
+    #[test]
+    fn delete_many_ended_empty_list_is_noop() {
+        let r = make();
+        let removed = r.delete_many_ended(&[]).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn delete_all_ended_keeps_active_rows() {
+        let r = make();
+        let a = r.insert(new_sess("/p/a")).unwrap();
+        let b = r.insert(new_sess("/p/b")).unwrap();
+        let _c = r.insert(new_sess("/p/c")).unwrap(); // stays running
+        r.mark_ended(&a.id, 100).unwrap();
+        r.mark_ended(&b.id, 200).unwrap();
+        let removed = r.delete_all_ended().unwrap();
+        assert_eq!(removed, 2);
+        let active = r.list_active().unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].project_dir, "/p/c");
+        // And the all-list reflects only the running one.
+        let all = r.list_all().unwrap();
+        assert_eq!(all.len(), 1);
     }
 
     #[test]

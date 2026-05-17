@@ -1,6 +1,8 @@
+pub mod autostart;
 pub mod commands;
 pub mod config;
 pub mod error;
+pub mod launch_args;
 pub mod poller;
 pub mod recent_projects;
 pub mod session_registry;

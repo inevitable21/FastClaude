@@ -22,6 +22,18 @@ export async function killSession(id: string): Promise<void> {
   return invoke<void>("kill_session", { id });
 }
 
+export async function deleteSession(id: string): Promise<void> {
+  return invoke<void>("delete_session", { id });
+}
+
+export async function deleteSessions(ids: string[]): Promise<number> {
+  return invoke<number>("delete_sessions", { ids });
+}
+
+export async function clearEndedSessions(): Promise<number> {
+  return invoke<number>("clear_ended_sessions");
+}
+
 export async function focusSession(id: string): Promise<void> {
   return invoke<void>("focus_session", { id });
 }
