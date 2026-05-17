@@ -59,14 +59,14 @@ Persisted via the existing config write path. Field order in the file is appende
 ```
 Settings.tsx
   └─ setConfig(IPC)
-       └─ Rust write_config(cfg)
-            └─ reconcile_autostart(cfg)
-                 ├─ if cfg.launch_on_login: AutoLaunchManager.enable(
-                 │     args = ["--launched-by-autostart",
-                 │             format!("--launch-mode={}", cfg.launch_mode)]
-                 │  )
-                 └─ else: AutoLaunchManager.disable()
+       └─ Rust set_config(cfg)
+            ├─ reconcile_autostart(&cfg)
+            │    ├─ if cfg.launch_on_login: AutoLaunchManager.enable()
+            │    └─ else: AutoLaunchManager.disable()
+            └─ config::save(...)   // only if reconcile succeeded
 ```
+
+Args registered with the autostart plugin are static (set once at `init()` time) — `enable()` takes no per-call args. So the autostart registry entry always carries just `--launched-by-autostart`. The chosen `launch_mode` is read from config at boot, **not** encoded into the CLI flag. This is simpler and avoids needing to re-register on every mode change.
 
 If `enable()` or `disable()` errors, `write_config` returns the error, the IPC call fails, the toast surfaces the message, and the in-memory draft is preserved — config on disk is not mutated. This avoids the "config says on, registry says off" lying state.
 
@@ -76,9 +76,9 @@ If `enable()` or `disable()` errors, `write_config` returns the error, the IPC c
 
 In `lib.rs` `.setup()`:
 
-1. Parse `std::env::args()` via `parse_launch_args()` → `LaunchArgs { from_autostart: bool, mode: LaunchMode }`. Missing or unrecognized `--launch-mode` falls back to `Window`.
+1. Parse `std::env::args()` via `parse_launch_args()` → `LaunchArgs { from_autostart: bool }`. The mode itself comes from the loaded config (`cfg.launch_mode`).
 2. **No reconciliation against the registry.** Boot is read-only. This respects user edits made via Task Manager's Startup tab.
-3. Apply the mode to the main window:
+3. Apply `cfg.launch_mode` to the main window:
    - `Window` → no-op.
    - `Minimized` → `window.minimize()` immediately after window creation.
    - `Hidden` → see "Hidden mode mechanism" below.
@@ -107,13 +107,13 @@ The CLI flag is the sole signal that distinguishes autostart launches from manua
 | Plugin reports already-enabled / already-disabled | Treated as success. |
 | `Hidden` saved with no hotkey configured | Save succeeds; warning toast. |
 | Stray `--launched-by-autostart` flag on manual run | Honored. Internal flag, not a trust boundary. |
-| Missing / unknown `--launch-mode` | Falls back to `Window`. |
+| Unrecognized `launch_mode` in config JSON (corruption) | `serde` default puts it back to `Window` on next read. |
 | Registry path stale (reinstall in different dir) | Stderr warning at boot; next Save rewrites it. |
 | Dev mode (`debug_assertions`) | `reconcile_autostart` is a no-op. |
 
 ## Testing
 
-- **Unit:** one Rust test for `parse_launch_args` covering the four cases: no flag, flag with each of the three modes, flag with garbage mode (→ Window).
+- **Unit:** Rust test for `parse_launch_args` covering: no `--launched-by-autostart` flag → `from_autostart: false`; flag present → `from_autostart: true`; unrelated args ignored. Plus a config round-trip test that the new fields serde-default cleanly when missing from on-disk JSON.
 - **Manual:** registry side is an OS integration; mocking adds no value. Manual checklist:
   1. Toggle on, mode=Window, save, reboot → window appears.
   2. Toggle on, mode=Minimized, save, reboot → window minimized in taskbar.
