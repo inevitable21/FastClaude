@@ -217,12 +217,13 @@ pub fn get_config(state: State<'_, AppState>) -> AppResult<Config> {
 }
 
 #[tauri::command]
-pub fn set_config(state: State<'_, AppState>, cfg: Config) -> AppResult<()> {
-    {
-        let mut held = state.config.lock().unwrap();
-        *held = cfg.clone();
-    }
+pub fn set_config(app: tauri::AppHandle, state: State<'_, AppState>, cfg: Config) -> AppResult<()> {
+    // Reconcile OS-level autostart BEFORE persisting. If this fails we don't
+    // want a config file that says "on" while the registry says "off".
+    crate::autostart::reconcile_autostart(&app, &cfg)?;
     config::save(&state.config_path, &cfg)?;
+    let mut held = state.config.lock().unwrap();
+    *held = cfg;
     Ok(())
 }
 
