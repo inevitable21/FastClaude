@@ -98,6 +98,18 @@ export function Settings({ onBack }: { onBack: () => void }) {
     try {
       await setConfig(draft);
       toast({ title: "Settings saved" });
+      if (
+        draft.launch_on_login &&
+        draft.launch_mode === "hidden" &&
+        !draft.hotkey.trim()
+      ) {
+        toast({
+          title: "Hidden mode set with no hotkey",
+          description:
+            "You'll only be able to reach the window via Task Manager. Configure a hotkey in the Hotkey section.",
+          variant: "destructive",
+        });
+      }
       onBack();
     } catch (e: unknown) {
       const msg = typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e);
@@ -209,6 +221,46 @@ export function Settings({ onBack }: { onBack: () => void }) {
           </Field>
           <p className="text-xs text-muted-foreground">
             Hotkey changes take effect after restart.
+          </p>
+        </Section>
+
+        <Section title="Startup">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm">Launch on login</div>
+              <div className="text-xs text-muted-foreground">
+                Start FastClaude automatically when you sign in to Windows.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-accent"
+              checked={draft.launch_on_login}
+              onChange={(e) =>
+                setDraft({ ...draft, launch_on_login: e.target.checked })
+              }
+            />
+          </div>
+          <Field label="Launch as">
+            <Select
+              value={draft.launch_mode}
+              onValueChange={(v) =>
+                setDraft({ ...draft, launch_mode: v as AppConfig["launch_mode"] })
+              }
+              disabled={!draft.launch_on_login}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="window">Window</SelectItem>
+                <SelectItem value="minimized">Minimized</SelectItem>
+                <SelectItem value="hidden">Hidden (hotkey only)</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            'Hidden' relies on your global hotkey — set one in the Hotkey section first.
           </p>
         </Section>
 
