@@ -8,7 +8,6 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use fastclaude_lib::{
     commands::{self, AppState},
     config, launch_args, poller,
-    autostart,
     session_registry::Registry,
     spawner, window_focus,
 };
