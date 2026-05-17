@@ -26,6 +26,8 @@ export interface RecentProject {
   last_launched_at: number | null;
 }
 
+export type LaunchMode = "window" | "minimized" | "hidden";
+
 export interface AppConfig {
   terminal_program: string;
   default_model: string;
@@ -35,6 +37,8 @@ export interface AppConfig {
   default_permission_mode: string;
   default_extra_args: string;
   default_prompt: string;
+  launch_on_login: boolean;
+  launch_mode: LaunchMode;
 }
 
 export interface LaunchInput {

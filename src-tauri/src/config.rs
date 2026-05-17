@@ -38,6 +38,13 @@ pub struct Config {
     /// LaunchDialog pre-fills its prompt textarea from this value.
     #[serde(default)]
     pub default_prompt: String,
+    /// If true, register FastClaude to launch at Windows login.
+    #[serde(default)]
+    pub launch_on_login: bool,
+    /// How the window should appear when launched by autostart.
+    /// (Read on every boot from the loaded config.)
+    #[serde(default)]
+    pub launch_mode: LaunchMode,
 }
 
 impl Default for Config {
@@ -51,6 +58,8 @@ impl Default for Config {
             default_permission_mode: String::new(),
             default_extra_args: String::new(),
             default_prompt: String::new(),
+            launch_on_login: false,
+            launch_mode: LaunchMode::Window,
         }
     }
 }
@@ -167,5 +176,27 @@ mod tests {
     #[test]
     fn launch_mode_default_is_window() {
         assert_eq!(LaunchMode::default(), LaunchMode::Window);
+    }
+
+    #[test]
+    fn load_defaults_autostart_fields_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(
+            &path,
+            br#"{"terminal_program":"auto","default_model":"claude-opus-4-7",
+                "hotkey":"Ctrl+Shift+C","idle_threshold_seconds":300}"#,
+        )
+        .unwrap();
+        let (cfg, _) = load(&path).unwrap();
+        assert!(!cfg.launch_on_login, "launch_on_login must default to false");
+        assert_eq!(cfg.launch_mode, LaunchMode::Window);
+    }
+
+    #[test]
+    fn config_default_has_autostart_off() {
+        let cfg = Config::default();
+        assert!(!cfg.launch_on_login);
+        assert_eq!(cfg.launch_mode, LaunchMode::Window);
     }
 }
