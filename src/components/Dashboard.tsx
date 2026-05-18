@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { listSessions, onSessionChanged, getConfig } from "@/lib/ipc";
+import { useToast } from "@/hooks/use-toast";
+import {
+  listSessions,
+  onSessionChanged,
+  getConfig,
+  onAutoContinueFired,
+  onAutoContinueFailed,
+  onAutoContinueGaveUp,
+} from "@/lib/ipc";
 import type { Session } from "@/types";
 import { SessionRow } from "./SessionRow";
 import { LaunchDialog } from "./LaunchDialog";
@@ -12,6 +20,7 @@ export function Dashboard({
   launchOpen: boolean;
   setLaunchOpen: (v: boolean) => void;
 }) {
+  const { toast } = useToast();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [hotkey, setHotkey] = useState<string>("");
 
@@ -29,16 +38,38 @@ export function Dashboard({
 
   useEffect(() => {
     refresh();
-    let unlisten: (() => void) | null = null;
-    onSessionChanged(refresh).then((fn) => {
-      unlisten = fn;
-    });
+    const unlisteners: Array<() => void> = [];
+    onSessionChanged(refresh).then((fn) => unlisteners.push(fn));
+    onAutoContinueFired((id) => {
+      refresh();
+      listSessions().then((all) => {
+        const s = all.find((x) => x.id === id);
+        const name = s?.project_dir.split(/[\\/]/).filter(Boolean).pop() ?? "session";
+        toast({ title: `Auto-continued ${name}` });
+      });
+    }).then((fn) => unlisteners.push(fn));
+    onAutoContinueFailed(({ id, error }) => {
+      refresh();
+      toast({
+        title: "Auto-continue failed",
+        description: `${id.slice(0, 8)}…: ${error}`,
+        variant: "destructive",
+      });
+    }).then((fn) => unlisteners.push(fn));
+    onAutoContinueGaveUp((id) => {
+      refresh();
+      toast({
+        title: "Auto-continue gave up",
+        description: `${id.slice(0, 8)}… — 3 spawn failures in a row.`,
+        variant: "destructive",
+      });
+    }).then((fn) => unlisteners.push(fn));
     const t = setInterval(refresh, 5000);
     return () => {
-      unlisten?.();
+      for (const u of unlisteners) u();
       clearInterval(t);
     };
-  }, [refresh]);
+  }, [refresh, toast]);
 
   return (
     <div className="text-foreground">

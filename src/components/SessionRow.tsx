@@ -1,12 +1,22 @@
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import type { Session } from "@/types";
-import { focusSession, killSession } from "@/lib/ipc";
+import { focusSession, killSession, setAutoContinue as setAutoContinueIpc } from "@/lib/ipc";
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return `${n}`;
+}
+
+function fmtCountdown(targetEpoch: number): string {
+  const secs = Math.max(0, Math.floor(targetEpoch - Date.now() / 1000));
+  if (secs <= 0) return "now";
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${secs}s`;
 }
 
 function elapsed(startedAt: number): string {
@@ -87,6 +97,45 @@ export function SessionRow({
       <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-accent/35 text-accent bg-accent/10">
         {session.model}
       </span>
+      {(() => {
+        const armed = session.auto_continue;
+        const pending = session.next_resume_at !== null;
+        const capReached = session.resume_count >= session.resume_cap;
+        let label = "↻ off";
+        let title = "Auto-continue is off. Click to arm.";
+        let className = "border-border text-muted-foreground";
+        if (armed && capReached) {
+          label = "↻ cap";
+          title = `Cap reached (${session.resume_count}/${session.resume_cap}). Toggle off and on to re-arm.`;
+          className = "border-border text-muted-foreground opacity-60";
+        } else if (armed && pending && session.next_resume_at !== null) {
+          label = `↻ ${fmtCountdown(session.next_resume_at)}`;
+          title = `Will resume at the reset (attempt ${session.resume_count + 1} of ${session.resume_cap}).`;
+          className = "border-accent text-accent bg-accent/10";
+        } else if (armed) {
+          label = "↻ on";
+          title = `Armed — will respawn when the 5h limit resets. (${session.resume_count}/${session.resume_cap} used)`;
+          className = "border-accent text-accent bg-accent/10";
+        }
+        async function toggle() {
+          try {
+            await setAutoContinueIpc(session.id, !armed);
+          } catch (e: unknown) {
+            const msg = typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e);
+            toast({ title: "Couldn't change auto-continue", description: msg, variant: "destructive" });
+          }
+          onChange();
+        }
+        return (
+          <button
+            title={title}
+            onClick={toggle}
+            className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${className} hover:brightness-110`}
+          >
+            {label}
+          </button>
+        );
+      })()}
       <Button size="sm" variant="ghost" onClick={focus}>
         Focus
       </Button>
