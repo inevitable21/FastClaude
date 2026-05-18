@@ -265,6 +265,49 @@ export function Settings({ onBack }: { onBack: () => void }) {
           </p>
         </Section>
 
+        <Section title="Auto-continue">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm">Default for new sessions</div>
+              <div className="text-xs text-muted-foreground">
+                Pre-arm the auto-continue checkbox when opening Launch.
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-accent"
+              checked={draft.default_auto_continue}
+              onChange={(e) =>
+                setDraft({ ...draft, default_auto_continue: e.target.checked })
+              }
+            />
+          </div>
+          <Field label="Default resume prompt">
+            <Textarea
+              value={draft.default_resume_prompt}
+              onChange={(e) =>
+                setDraft({ ...draft, default_resume_prompt: e.target.value })
+              }
+              placeholder="continue"
+            />
+          </Field>
+          <Field label="Max auto-resumes per session (1–10)">
+            <Input
+              value={String(draft.default_resume_cap)}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                if (!Number.isNaN(n) && n >= 1 && n <= 10) {
+                  setDraft({ ...draft, default_resume_cap: n });
+                }
+              }}
+            />
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            When a session hits its 5-hour limit, FastClaude will wait until the reset and
+            relaunch with <code>claude --resume</code> plus this prompt. Capped to keep runaway loops in check.
+          </p>
+        </Section>
+
         <Section title="Theme">
           <div className="flex items-center gap-3">
             <div className="flex-1 text-sm text-muted-foreground">
