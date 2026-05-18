@@ -50,6 +50,9 @@ export function LaunchDialog({
   const [effort, setEffort] = useState<string>("");
   const [permissionMode, setPermissionMode] = useState<string>("");
   const [extraArgs, setExtraArgs] = useState<string>("");
+  const [autoContinue, setAutoContinue] = useState<boolean>(false);
+  const [resumePromptOverride, setResumePromptOverride] = useState<string>("");
+  const [showResumePrompt, setShowResumePrompt] = useState<boolean>(false);
   const [preview, setPreview] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -93,6 +96,9 @@ export function LaunchDialog({
         setPermissionMode(c.default_permission_mode);
         setExtraArgs(c.default_extra_args);
         setPrompt(c.default_prompt);
+        setAutoContinue(c.default_auto_continue);
+        setResumePromptOverride("");
+        setShowResumePrompt(false);
       })
       .catch(() => {});
   }, [open]);
@@ -137,6 +143,8 @@ export function LaunchDialog({
         effort,
         permission_mode: permissionMode,
         extra_args: extraArgs,
+        auto_continue: autoContinue,
+        resume_prompt: resumePromptOverride.trim() || undefined,
       });
       toast({ title: "Session launched" });
       onLaunched();
@@ -321,6 +329,36 @@ export function LaunchDialog({
               placeholder="Implement X..."
               className="font-sans"
             />
+          </div>
+          <div className="rounded-md border border-border p-2 space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-accent"
+                checked={autoContinue}
+                onChange={(e) => setAutoContinue(e.target.checked)}
+              />
+              <span className="text-sm">Auto-continue when the 5-hour limit resets</span>
+            </label>
+            {autoContinue && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowResumePrompt((v) => !v)}
+                  className="text-[11px] text-accent hover:underline"
+                >
+                  {showResumePrompt ? "Use default resume prompt" : "Override resume prompt"}
+                </button>
+                {showResumePrompt && (
+                  <Textarea
+                    value={resumePromptOverride}
+                    onChange={(e) => setResumePromptOverride(e.target.value)}
+                    placeholder={cfg?.default_resume_prompt ?? "continue"}
+                    className="font-sans"
+                  />
+                )}
+              </>
+            )}
           </div>
           {preview && (
             <div className="text-[11px] font-mono input-fill border border-border rounded-md p-2 break-all">
