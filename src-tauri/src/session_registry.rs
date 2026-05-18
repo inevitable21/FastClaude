@@ -116,6 +116,7 @@ impl Registry {
     }
 
     fn init_schema(conn: &Connection) -> AppResult<()> {
+        // Step 1: create the table and the index on a column that has always existed.
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS sessions (
@@ -145,12 +146,12 @@ impl Registry {
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_active
               ON sessions(ended_at) WHERE ended_at IS NULL;
-            CREATE INDEX IF NOT EXISTS idx_sessions_pending_resume
-              ON sessions(next_resume_at) WHERE next_resume_at IS NOT NULL;
             "#,
         )?;
-        // Migrations for existing DBs. Each ALTER is wrapped so a duplicate-column
-        // error on re-run is silently ignored.
+        // Step 2: ALTER migrations for existing DBs that pre-date the auto-continue
+        // feature. Each statement is run individually so a duplicate-column error on
+        // a fresh DB (where the column already exists from CREATE TABLE) is silently
+        // ignored, leaving other migrations unaffected.
         let migrations = [
             "ALTER TABLE sessions ADD COLUMN auto_continue INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN resume_prompt TEXT",
@@ -163,6 +164,12 @@ impl Registry {
         for sql in migrations {
             let _ = conn.execute(sql, []);
         }
+        // Step 3: create the index on next_resume_at only after the ALTER migrations
+        // have guaranteed the column exists (whether this is a fresh or legacy DB).
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_pending_resume \
+             ON sessions(next_resume_at) WHERE next_resume_at IS NOT NULL;",
+        )?;
         Ok(())
     }
 
@@ -604,5 +611,49 @@ mod tests {
         };
         let s = r.insert(bad).unwrap();
         assert_eq!(s.resume_cap, 3, "0 must trip the fallback, not persist as 0");
+    }
+
+    #[test]
+    fn open_old_schema_db_runs_alter_migrations() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy.db");
+        // Hand-craft a pre-feature schema (no auto_continue columns).
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                project_dir TEXT NOT NULL,
+                model TEXT NOT NULL,
+                claude_pid INTEGER NOT NULL,
+                terminal_pid INTEGER NOT NULL,
+                terminal_window_handle TEXT,
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                jsonl_path TEXT,
+                jsonl_offset INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                last_activity_at INTEGER NOT NULL,
+                tokens_in INTEGER NOT NULL DEFAULT 0,
+                tokens_out INTEGER NOT NULL DEFAULT 0,
+                tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+                tokens_cache_write INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO sessions
+                (id, project_dir, model, claude_pid, terminal_pid,
+                 started_at, status, last_activity_at)
+            VALUES ('legacy-id', '/p', 'claude-opus-4-7', 100, 99, 1000, 'running', 1000);
+            "#,
+        ).unwrap();
+        drop(conn);
+
+        // Reopen via Registry — should run ALTERs and read the legacy row.
+        let r = Registry::open(&path).unwrap();
+        let s = r.get("legacy-id").unwrap();
+        assert!(!s.auto_continue);
+        assert_eq!(s.resume_cap, 3);
+        assert_eq!(s.resume_count, 0);
+        assert_eq!(s.next_resume_at, None);
     }
 }
