@@ -583,8 +583,26 @@ mod tests {
         assert_eq!(s.resume_prompt, None);
         assert_eq!(s.next_resume_at, None);
         assert_eq!(s.resume_count, 0);
-        assert!(s.resume_cap >= 1, "default cap must be at least 1");
+        assert_eq!(s.resume_cap, 3, "default cap is 3 when caller supplies 3");
         assert_eq!(s.resumed_into, None);
         assert_eq!(s.resume_failures, 0);
+    }
+
+    #[test]
+    fn insert_falls_back_to_default_cap_when_caller_passes_zero() {
+        let r = make();
+        let bad = NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: false,
+            resume_prompt: None,
+            resume_cap: 0,
+            resume_count: 0,
+        };
+        let s = r.insert(bad).unwrap();
+        assert_eq!(s.resume_cap, 3, "0 must trip the fallback, not persist as 0");
     }
 }
