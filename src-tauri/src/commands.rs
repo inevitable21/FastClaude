@@ -12,7 +12,7 @@ use tauri::{Emitter, State};
 
 pub struct AppState {
     pub registry: Arc<Registry>,
-    pub spawner: Box<dyn Spawner>,
+    pub spawner: Arc<dyn Spawner>,
     pub focus: Box<dyn WindowFocus>,
     pub config: Arc<Mutex<Config>>,
     pub config_path: PathBuf,

@@ -33,9 +33,10 @@ fn main() {
 
             reconcile_startup(&registry);
 
+            let spawner_arc: Arc<dyn fastclaude_lib::spawner::Spawner> = spawner::default_spawner();
             let state = AppState {
                 registry: registry.clone(),
-                spawner: spawner::default_spawner(),
+                spawner: spawner_arc.clone(),
                 focus: window_focus::default_focus(),
                 config: cfg_arc.clone(),
                 config_path: cfg_path.clone(),
@@ -109,14 +110,33 @@ fn main() {
             let app_handle = app.handle().clone();
             let registry_for_poller = registry.clone();
             let cfg_for_poller = cfg_arc.clone();
+            let spawner_for_poller = spawner_arc.clone();
             tauri::async_runtime::spawn(async move {
                 poller::run_loop(
                     registry_for_poller,
+                    spawner_for_poller,
                     cfg_for_poller,
                     std::time::Duration::from_secs(2),
-                    move |report| {
-                        if !report.ended_ids.is_empty() || report.usage_changed {
-                            let _ = app_handle.emit("session-changed", &report.ended_ids);
+                    move |tick_report, fire_report| {
+                        let any_change = !tick_report.ended_ids.is_empty()
+                            || tick_report.usage_changed
+                            || !fire_report.fired_ids.is_empty()
+                            || !fire_report.failed_ids.is_empty()
+                            || !fire_report.gave_up_ids.is_empty();
+                        for id in &fire_report.fired_ids {
+                            let _ = app_handle.emit("auto-continue-fired", id);
+                        }
+                        for (id, msg) in &fire_report.failed_ids {
+                            let _ = app_handle.emit(
+                                "auto-continue-failed",
+                                serde_json::json!({ "id": id, "error": msg }),
+                            );
+                        }
+                        for id in &fire_report.gave_up_ids {
+                            let _ = app_handle.emit("auto-continue-gave-up", id);
+                        }
+                        if any_change {
+                            let _ = app_handle.emit("session-changed", &tick_report.ended_ids);
                         }
                     },
                 )

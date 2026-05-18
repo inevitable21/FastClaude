@@ -1,5 +1,6 @@
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[cfg(target_os = "windows")]
 mod windows;
@@ -77,18 +78,18 @@ pub trait Spawner: Send + Sync {
     fn spawn(&self, req: &SpawnRequest) -> AppResult<SpawnResult>;
 }
 
-pub fn default_spawner() -> Box<dyn Spawner> {
+pub fn default_spawner() -> Arc<dyn Spawner> {
     #[cfg(target_os = "windows")]
     {
-        Box::new(windows::WindowsSpawner::new())
+        Arc::new(windows::WindowsSpawner::new())
     }
     #[cfg(target_os = "macos")]
     {
-        Box::new(macos::MacSpawner)
+        Arc::new(macos::MacSpawner)
     }
     #[cfg(target_os = "linux")]
     {
-        Box::new(linux::LinuxSpawner)
+        Arc::new(linux::LinuxSpawner)
     }
 }
 

@@ -7,6 +7,86 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 
+#[derive(Debug, Default)]
+pub struct FireReport {
+    pub fired_ids: Vec<String>,
+    pub failed_ids: Vec<(String, String)>, // (session_id, error_msg)
+    pub gave_up_ids: Vec<String>,
+}
+
+const RESUME_BACKOFF_SECS: i64 = 5 * 60;
+const RESUME_FAILURE_GIVE_UP: i64 = 3;
+
+pub fn fire_due_resumes(
+    registry: &Registry,
+    spawner: &dyn crate::spawner::Spawner,
+    cfg: &Config,
+    now: i64,
+) -> AppResult<FireReport> {
+    let mut report = FireReport::default();
+    for s in registry.list_due_resumes(now)? {
+        let Some(jsonl) = s.jsonl_path.as_deref() else {
+            // No jsonl path → we can't form a --resume id yet. Defer one tick.
+            continue;
+        };
+        let Some(uuid) = jsonl_session_id(jsonl) else { continue };
+
+        let prompt = s
+            .resume_prompt
+            .clone()
+            .unwrap_or_else(|| cfg.default_resume_prompt.clone());
+
+        let req = crate::spawner::SpawnRequest {
+            project_dir: s.project_dir.clone(),
+            model: s.model.clone(),
+            prompt: Some(prompt),
+            terminal_program: cfg.terminal_program.clone(),
+            resume: Some(uuid),
+            effort: cfg.default_effort.clone(),
+            permission_mode: cfg.default_permission_mode.clone(),
+            extra_args: cfg.default_extra_args.clone(),
+        };
+
+        match spawner.spawn(&req) {
+            Ok(result) => {
+                let new_row = registry.insert(crate::session_registry::NewSession {
+                    project_dir: s.project_dir.clone(),
+                    model: s.model.clone(),
+                    claude_pid: result.claude_pid,
+                    terminal_pid: result.terminal_pid,
+                    terminal_window_handle: result.terminal_window_handle,
+                    auto_continue: true,
+                    resume_prompt: s.resume_prompt.clone(),
+                    resume_cap: s.resume_cap,
+                    resume_count: s.resume_count + 1,
+                })?;
+                registry.record_resume_success(&s.id, &new_row.id)?;
+                report.fired_ids.push(s.id.clone());
+            }
+            Err(e) => {
+                let msg = format!("{e}");
+                let new_failures = s.resume_failures + 1;
+                if new_failures >= RESUME_FAILURE_GIVE_UP {
+                    registry.record_resume_failure(&s.id, now)?;
+                    registry.give_up_resume(&s.id)?;
+                    report.gave_up_ids.push(s.id.clone());
+                } else {
+                    registry.record_resume_failure(&s.id, now + RESUME_BACKOFF_SECS)?;
+                    report.failed_ids.push((s.id.clone(), msg));
+                }
+            }
+        }
+    }
+    Ok(report)
+}
+
+fn jsonl_session_id(jsonl_path: &str) -> Option<String> {
+    std::path::Path::new(jsonl_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+}
+
 pub trait LivenessProbe: Send + Sync {
     fn alive(&mut self, pid: u32) -> bool;
 }
@@ -174,9 +254,10 @@ fn encode_project_dir(path: &str) -> String {
 
 pub async fn run_loop(
     registry: Arc<Registry>,
+    spawner: Arc<dyn crate::spawner::Spawner>,
     cfg: Arc<std::sync::Mutex<Config>>,
     interval: std::time::Duration,
-    on_tick: impl Fn(TickReport) + Send + 'static,
+    on_tick: impl Fn(TickReport, FireReport) + Send + 'static,
 ) {
     let mut probe = SysInfoProbe::new();
     let mut ticker = tokio::time::interval(interval);
@@ -184,10 +265,21 @@ pub async fn run_loop(
         ticker.tick().await;
         let now = chrono::Utc::now().timestamp();
         let snapshot = cfg.lock().unwrap().clone();
-        match tick(&registry, &mut probe, &snapshot, now) {
-            Ok(report) => on_tick(report),
-            Err(e) => eprintln!("poller error: {e}"),
-        }
+        let tick_report = match tick(&registry, &mut probe, &snapshot, now) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("poller error: {e}");
+                continue;
+            }
+        };
+        let fire_report = match fire_due_resumes(&registry, spawner.as_ref(), &snapshot, now) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("fire-resume error: {e}");
+                FireReport::default()
+            }
+        };
+        on_tick(tick_report, fire_report);
     }
 }
 
@@ -197,6 +289,190 @@ mod tests {
     use crate::config::Config;
     use crate::session_registry::NewSession;
     use std::collections::HashSet;
+
+    use crate::spawner::{SpawnRequest, SpawnResult, Spawner};
+    use crate::error::AppResult as ResumeResult;
+    use std::sync::Mutex as SpawnerMutex;
+
+    struct FakeSpawner {
+        calls: SpawnerMutex<Vec<SpawnRequest>>,
+        result: SpawnResult,
+    }
+    impl FakeSpawner {
+        fn new(result: SpawnResult) -> Self {
+            Self { calls: SpawnerMutex::new(Vec::new()), result }
+        }
+        fn calls(&self) -> Vec<SpawnRequest> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+    impl Spawner for FakeSpawner {
+        fn spawn(&self, req: &SpawnRequest) -> ResumeResult<SpawnResult> {
+            self.calls.lock().unwrap().push(req.clone());
+            Ok(self.result.clone())
+        }
+    }
+
+    #[test]
+    fn fires_due_resume_and_creates_successor_row() {
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(crate::session_registry::NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: Some("keep going".into()),
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        r.set_jsonl_path(&s.id, "/tmp/abc-1234.jsonl").unwrap();
+        r.set_pending_resume(&s.id, 500).unwrap();
+
+        let spawner = FakeSpawner::new(SpawnResult {
+            claude_pid: 42,
+            terminal_pid: 41,
+            terminal_window_handle: Some("hwnd-1".into()),
+        });
+        let report = fire_due_resumes(&r, &spawner, &cfg, 1000).unwrap();
+        assert_eq!(report.fired_ids.len(), 1);
+
+        let calls = spawner.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].resume.as_deref(), Some("abc-1234"),
+            "uuid is derived from jsonl filename stem");
+        assert_eq!(calls[0].prompt.as_deref(), Some("keep going"),
+            "per-session prompt takes precedence");
+        assert_eq!(calls[0].model, "claude-opus-4-7");
+
+        let pred = r.get(&s.id).unwrap();
+        assert_eq!(pred.next_resume_at, None);
+        assert!(pred.resumed_into.is_some());
+
+        let new_id = pred.resumed_into.unwrap();
+        let succ = r.get(&new_id).unwrap();
+        assert_eq!(succ.resume_count, 1);
+        assert_eq!(succ.resume_cap, 3);
+        assert!(succ.auto_continue);
+    }
+
+    #[test]
+    fn falls_back_to_global_resume_prompt_when_per_session_unset() {
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config { default_resume_prompt: "global continue".into(), ..Config::default() };
+        let s = r.insert(crate::session_registry::NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
+        r.set_pending_resume(&s.id, 500).unwrap();
+        let spawner = FakeSpawner::new(SpawnResult {
+            claude_pid: 42, terminal_pid: 41, terminal_window_handle: None,
+        });
+        fire_due_resumes(&r, &spawner, &cfg, 1000).unwrap();
+        assert_eq!(spawner.calls()[0].prompt.as_deref(), Some("global continue"));
+    }
+
+    #[test]
+    fn cap_reached_blocks_further_fires() {
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(crate::session_registry::NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 1,
+            resume_count: 1, // already at cap
+        }).unwrap();
+        r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
+        let _ = r.set_pending_resume(&s.id, 500); // no-op due to cap check
+        let spawner = FakeSpawner::new(SpawnResult {
+            claude_pid: 42, terminal_pid: 41, terminal_window_handle: None,
+        });
+        let report = fire_due_resumes(&r, &spawner, &cfg, 1000).unwrap();
+        assert!(report.fired_ids.is_empty());
+        assert!(spawner.calls().is_empty());
+    }
+
+    #[test]
+    fn spawn_failure_bumps_failure_count_and_backs_off() {
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(crate::session_registry::NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
+        r.set_pending_resume(&s.id, 500).unwrap();
+
+        struct FailingSpawner;
+        impl Spawner for FailingSpawner {
+            fn spawn(&self, _req: &SpawnRequest) -> ResumeResult<SpawnResult> {
+                Err(crate::error::AppError::Spawn("nope".into()))
+            }
+        }
+        let report = fire_due_resumes(&r, &FailingSpawner, &cfg, 1000).unwrap();
+        assert!(report.fired_ids.is_empty());
+        assert_eq!(report.failed_ids.len(), 1);
+        let got = r.get(&s.id).unwrap();
+        assert_eq!(got.resume_failures, 1);
+        assert_eq!(got.next_resume_at, Some(1000 + 5 * 60), "5-min back-off scheduled");
+    }
+
+    #[test]
+    fn three_spawn_failures_give_up() {
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(crate::session_registry::NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
+        r.set_pending_resume(&s.id, 500).unwrap();
+
+        struct FailingSpawner;
+        impl Spawner for FailingSpawner {
+            fn spawn(&self, _req: &SpawnRequest) -> ResumeResult<SpawnResult> {
+                Err(crate::error::AppError::Spawn("nope".into()))
+            }
+        }
+        let mut now = 1000i64;
+        for _ in 0..3 {
+            let _ = fire_due_resumes(&r, &FailingSpawner, &cfg, now).unwrap();
+            let row = r.get(&s.id).unwrap();
+            now = row.next_resume_at.unwrap_or(now) + 1;
+        }
+        let got = r.get(&s.id).unwrap();
+        assert_eq!(got.resume_failures, 3);
+        assert_eq!(got.next_resume_at, None, "after 3 strikes we give up");
+    }
 
     struct FakeProbe(HashSet<u32>);
     impl LivenessProbe for FakeProbe {
