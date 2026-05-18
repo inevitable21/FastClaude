@@ -156,6 +156,8 @@ fn main() {
             commands::recent_projects,
             commands::get_config,
             commands::set_config,
+            commands::set_auto_continue,
+            commands::set_resume_prompt,
             commands::preview_launch_command,
             commands::get_first_run,
             commands::clear_first_run,
