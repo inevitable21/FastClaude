@@ -146,14 +146,27 @@ fn stringify_content(v: &serde_json::Value) -> String {
 
 fn is_limit_text(s: &str) -> bool {
     let lower = s.to_lowercase();
-    lower.contains("5-hour limit")
+    // Compound-guard patterns: a "limit/cap" word AND an "action" word.
+    // First the strict, unambiguous markers:
+    if lower.contains("rate_limit_error") {
+        return true;
+    }
+    if lower.contains("5-hour limit")
         || lower.contains("five-hour limit")
         || lower.contains("5h limit")
-        || lower.contains("usage limit")
+    {
+        return true;
+    }
+    // Then the compound forms — "limit" or "cap" must co-occur with an
+    // action word so plain informational sentences don't false-positive.
+    let has_action = lower.contains("reached")
+        || lower.contains("resets at")
+        || lower.contains("hit")
+        || lower.contains("exceeded");
+    let has_limit_word = lower.contains("usage limit")
         || lower.contains("usage cap")
-        || lower.contains("rate_limit_error")
-        || (lower.contains("limit reached") && lower.contains("claude"))
-        || (lower.contains("limit") && lower.contains("resets at"))
+        || (lower.contains("limit") && lower.contains("claude"));
+    has_action && has_limit_word
 }
 
 /// Parse an HH:MM (24h) reset time from the message and convert to an epoch
@@ -164,7 +177,7 @@ fn parse_reset_time_from(s: &str) -> Option<i64> {
     use chrono::{NaiveTime, TimeZone, Utc};
     let bytes = s.as_bytes();
     let mut i = 0;
-    while i + 4 < bytes.len() {
+    while i + 3 < bytes.len() {
         if bytes[i].is_ascii_digit() {
             let colon = if bytes[i + 1] == b':' { Some(i + 1) }
                 else if i + 2 < bytes.len() && bytes[i + 2] == b':' { Some(i + 2) }
@@ -315,5 +328,28 @@ mod tests {
         assert_eq!(d.tokens_in, 11);
         assert_eq!(d.tokens_out, 6);
         assert!(d.limit_event.is_some());
+    }
+
+    #[test]
+    fn does_not_match_benign_usage_limit_mentions() {
+        // The phrase "usage limit" alone (without an action word) is benign chatter.
+        let f = write_jsonl(&[
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"You are approaching your usage limit, but plenty left for today."}],"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"There is no usage cap on the Pro plan."}],"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+        ]);
+        let d = read_delta(f.path(), 0).unwrap();
+        assert!(d.limit_event.is_none(), "benign 'usage limit/cap' mentions must not fire");
+    }
+
+    #[test]
+    fn parses_reset_time_at_end_of_short_message() {
+        // Edge: a short message ending exactly in "HH:MM" with nothing after.
+        // The old i+4 bound silently dropped this; the relaxed i+3 catches it.
+        let f = write_jsonl(&[
+            r#"{"type":"system","subtype":"error","content":"rate_limit_error 14:30"}"#,
+        ]);
+        let d = read_delta(f.path(), 0).unwrap();
+        let ev = d.limit_event.expect("limit detected");
+        assert!(ev.reset_at > 0, "reset_at must be parsed, not the sentinel 0");
     }
 }
