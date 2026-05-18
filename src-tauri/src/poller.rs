@@ -88,6 +88,21 @@ pub fn tick(
                 registry.set_status(&s.id, Status::Running)?;
             }
             report.usage_changed = true;
+
+            // NEW — arm pending resume if claude reported a rate-limit.
+            if let Some(ev) = delta.limit_event {
+                let reset_at = if ev.reset_at > 0 {
+                    ev.reset_at
+                } else {
+                    // Sentinel 0 from usage_reader: apply the caller-side
+                    // fallback of "last activity + 5h + 60s of slack".
+                    mtime + 5 * 3600 + 60
+                };
+                // set_pending_resume is a no-op when auto_continue = 0, when
+                // ended_at is set, or when resume_count >= resume_cap, so the
+                // call is safe to make unconditionally.
+                let _ = registry.set_pending_resume(&s.id, reset_at)?;
+            }
         } else if now - s.last_activity_at > cfg.idle_threshold_seconds as i64
             && s.status != Status::Idle
         {
@@ -249,5 +264,116 @@ mod tests {
             encode_project_dir(r"C:\GitProjects\FastClaude"),
             "C--GitProjects-FastClaude"
         );
+    }
+
+    #[test]
+    fn arms_pending_resume_when_limit_event_seen_on_optin_row() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use crate::session_registry::NewSession;
+
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+
+        let mut jsonl = NamedTempFile::new().unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"5-hour limit reached, resets at 23:30"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+        ).unwrap();
+        jsonl.flush().unwrap();
+        r.set_jsonl_path(&s.id, &jsonl.path().to_string_lossy()).unwrap();
+        // Backdate so the file mtime is always > last_activity_at.
+        r.backdate_last_activity(&s.id, 0).unwrap();
+
+        let mut probe = FakeProbe([1u32].into_iter().collect());
+        let report = tick(&r, &mut probe, &cfg, 1000).unwrap();
+        assert!(report.usage_changed);
+
+        let got = r.get(&s.id).unwrap();
+        assert!(got.next_resume_at.is_some(), "must arm pending resume on opt-in row");
+    }
+
+    #[test]
+    fn does_not_arm_pending_resume_when_session_not_optin() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use crate::session_registry::NewSession;
+
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: false,  // not opted in
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        let mut jsonl = NamedTempFile::new().unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"5-hour limit reached, resets at 14:30"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+        ).unwrap();
+        jsonl.flush().unwrap();
+        r.set_jsonl_path(&s.id, &jsonl.path().to_string_lossy()).unwrap();
+        // Backdate so the file mtime is always > last_activity_at.
+        r.backdate_last_activity(&s.id, 0).unwrap();
+
+        let mut probe = FakeProbe([1u32].into_iter().collect());
+        let _ = tick(&r, &mut probe, &cfg, 1000).unwrap();
+        let got = r.get(&s.id).unwrap();
+        assert!(got.next_resume_at.is_none());
+    }
+
+    #[test]
+    fn falls_back_to_jsonl_mtime_plus_5h_when_reset_unparseable() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use crate::session_registry::NewSession;
+
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        let mut jsonl = NamedTempFile::new().unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"5-hour limit reached. Try again later."}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+        ).unwrap();
+        jsonl.flush().unwrap();
+        r.set_jsonl_path(&s.id, &jsonl.path().to_string_lossy()).unwrap();
+        // Backdate so the file mtime is always > last_activity_at.
+        r.backdate_last_activity(&s.id, 0).unwrap();
+
+        let mut probe = FakeProbe([1u32].into_iter().collect());
+        let _ = tick(&r, &mut probe, &cfg, 1000).unwrap();
+        let got = r.get(&s.id).unwrap();
+        // last_activity_at gets set to the JSONL mtime by apply_usage_delta.
+        let expected = got.last_activity_at + 5 * 3600 + 60;
+        assert_eq!(got.next_resume_at, Some(expected),
+            "fallback is last_activity_at + 5h + 60s when usage_reader returns sentinel 0");
     }
 }

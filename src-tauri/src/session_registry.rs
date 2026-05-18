@@ -530,6 +530,18 @@ impl Registry {
         }
         Ok(())
     }
+
+    /// Test-only helper: force `last_activity_at` to a specific value so that
+    /// poller tests can guarantee `mtime > last_activity_at` without sleeping.
+    #[cfg(test)]
+    pub fn backdate_last_activity(&self, id: &str, ts: i64) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET last_activity_at = ?1 WHERE id = ?2",
+            params![ts, id],
+        )?;
+        Ok(())
+    }
 }
 
 fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
