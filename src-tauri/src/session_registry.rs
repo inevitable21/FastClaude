@@ -368,6 +368,13 @@ impl Registry {
         Ok(())
     }
 
+    /// Arms or disarms auto-continue for a session.
+    ///
+    /// Disarming (`on = false`) also clears any pending `next_resume_at` in
+    /// the same UPDATE — a disarmed session cannot fire even if a previous
+    /// limit event scheduled one. Arming does not auto-schedule; a separate
+    /// `set_pending_resume` call (driven by the poller detecting a rate
+    /// limit) is needed for that.
     pub fn set_auto_continue(&self, id: &str, on: bool) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let sql = if on {
@@ -409,7 +416,11 @@ impl Registry {
         Ok(n > 0)
     }
 
-    /// Rows whose pending resume time has passed and are eligible to fire.
+    /// Active opt-in rows whose pending resume time has passed and that are
+    /// below their resume cap. Sorted oldest-due first.
+    ///
+    /// `now` is interpolated into the SQL via `format!` (consistent with the
+    /// existing `list_where` helper). Safe — `i64` cannot carry SQL injection.
     pub fn list_due_resumes(&self, now: i64) -> AppResult<Vec<Session>> {
         self.list_where(&format!(
             "auto_continue = 1
@@ -420,6 +431,18 @@ impl Registry {
         ))
     }
 
+    /// Records that an auto-resume successfully spawned a successor session.
+    ///
+    /// Clears `next_resume_at` (no more resumes pending on THIS row), sets
+    /// `resumed_into = new_id` (forward pointer for chain visualization), and
+    /// resets `resume_failures = 0`.
+    ///
+    /// Note: `resume_count` is intentionally NOT incremented on this row.
+    /// The cap is enforced on the successor row, which is inserted with
+    /// `resume_count = predecessor.resume_count + 1` (see Task 7's fire loop).
+    /// The predecessor itself stays armed until its `claude_pid` dies and the
+    /// poller marks it ended — at which point `mark_ended` clears its
+    /// `next_resume_at`, preventing any further fire from this row.
     pub fn record_resume_success(&self, id: &str, new_id: &str) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let n = conn.execute(
@@ -451,6 +474,12 @@ impl Registry {
         Ok(())
     }
 
+    /// Permanently abandons the pending resume (e.g. max retries exceeded).
+    ///
+    /// Clears `next_resume_at` but leaves `auto_continue` and `resume_failures`
+    /// untouched. Unlike `record_resume_failure`, this does NOT schedule a
+    /// retry — the row will not fire again unless an external caller arms a
+    /// new `next_resume_at`. Used by the fire loop after the 3-strike give-up.
     pub fn give_up_resume(&self, id: &str) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let n = conn.execute(
