@@ -89,6 +89,8 @@ pub fn launch_session(
         resume_prompt: input.resume_prompt,
         resume_cap: cfg.default_resume_cap,
         resume_count: 0,
+        jsonl_path: None,
+        jsonl_offset: 0,
     })?;
     let _ = app.emit("session-changed", &session);
     Ok(session)
@@ -111,6 +113,11 @@ pub fn kill_session(app: tauri::AppHandle, state: State<'_, AppState>, id: Strin
     );
     sys.refresh_processes();
     kill_session_chain(&sys, s.claude_pid as u32);
+    // User-initiated kill: explicitly clear auto-continue so this session
+    // won't auto-resume. mark_ended no longer cascades this clear (that's
+    // reserved for poller-detected deaths where we WANT the pending resume
+    // to survive into fire_due_resumes).
+    let _ = state.registry.set_auto_continue(&id, false);
     state
         .registry
         .mark_ended(&id, chrono::Utc::now().timestamp())?;
@@ -379,10 +386,39 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_auto_continue(&s.id, true).unwrap();
         assert!(r.get(&s.id).unwrap().auto_continue);
         r.set_resume_prompt(&s.id, Some("keep going")).unwrap();
         assert_eq!(r.get(&s.id).unwrap().resume_prompt.as_deref(), Some("keep going"));
+    }
+
+    #[test]
+    fn user_kill_disarms_auto_continue() {
+        let r = Registry::open_in_memory().unwrap();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "m".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
+        }).unwrap();
+        r.set_pending_resume(&s.id, 5000).unwrap();
+        // The kill_session command, conceptually: disarm first, then mark ended.
+        // We test the registry-level invariant rather than the full IPC path.
+        r.set_auto_continue(&s.id, false).unwrap();
+        r.mark_ended(&s.id, 9999).unwrap();
+        let got = r.get(&s.id).unwrap();
+        assert!(!got.auto_continue, "auto_continue is off");
+        assert_eq!(got.next_resume_at, None,
+            "user kill must clear pending resume so we don't auto-resume after manual kill");
     }
 }

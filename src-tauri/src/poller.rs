@@ -75,6 +75,8 @@ pub fn fire_due_resumes(
                     resume_prompt: s.resume_prompt.clone(),
                     resume_cap: s.resume_cap,
                     resume_count: s.resume_count + 1,
+                    jsonl_path: s.jsonl_path.clone(),
+                    jsonl_offset: s.jsonl_offset,
                 })?;
                 registry.record_resume_success(&s.id, &new_row.id)?;
                 report.fired_ids.push(s.id.clone());
@@ -144,11 +146,10 @@ pub fn tick(
     let mut report = TickReport::default();
     let active = registry.list_active()?;
     for s in active {
-        if !probe.alive(s.claude_pid as u32) {
-            registry.mark_ended(&s.id, now)?;
-            report.ended_ids.push(s.id);
-            continue;
-        }
+        let alive = probe.alive(s.claude_pid as u32);
+
+        // Resolve jsonl_path even for dead-claude rows so we capture any final
+        // rate-limit signal claude wrote on its way out.
         let jsonl_path: Option<PathBuf> = match s.jsonl_path.clone() {
             Some(p) => Some(PathBuf::from(p)),
             None => {
@@ -160,48 +161,59 @@ pub fn tick(
                 }
             }
         };
-        let Some(jsonl) = jsonl_path else { continue };
-        let mtime = match std::fs::metadata(&jsonl).and_then(|m| m.modified()) {
-            Ok(t) => t
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-            Err(_) => continue,
-        };
-        if mtime > s.last_activity_at {
-            let delta = usage_reader::read_delta(&jsonl, s.jsonl_offset as u64)?;
-            registry.apply_usage_delta(
-                &s.id,
-                delta.new_offset as i64,
-                delta.tokens_in,
-                delta.tokens_out,
-                delta.tokens_cache_read,
-                delta.tokens_cache_write,
-                mtime,
-            )?;
-            if s.status != Status::Running {
-                registry.set_status(&s.id, Status::Running)?;
-            }
-            report.usage_changed = true;
 
-            // NEW — arm pending resume if claude reported a rate-limit.
-            if let Some(ev) = delta.limit_event {
-                let reset_at = if ev.reset_at > 0 {
-                    ev.reset_at
-                } else {
-                    // Sentinel 0 from usage_reader: apply the caller-side
-                    // fallback of "last activity + 5h + 60s of slack".
-                    mtime + 5 * 3600 + 60
-                };
-                // set_pending_resume is a no-op when auto_continue = 0, when
-                // ended_at is set, or when resume_count >= resume_cap, so the
-                // call is safe to make unconditionally.
-                let _ = registry.set_pending_resume(&s.id, reset_at)?;
+        if let Some(jsonl) = jsonl_path {
+            let mtime = match std::fs::metadata(&jsonl).and_then(|m| m.modified()) {
+                Ok(t) => t
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0),
+                Err(_) => 0,
+            };
+            if mtime > s.last_activity_at {
+                let delta = usage_reader::read_delta(&jsonl, s.jsonl_offset as u64)?;
+                registry.apply_usage_delta(
+                    &s.id,
+                    delta.new_offset as i64,
+                    delta.tokens_in,
+                    delta.tokens_out,
+                    delta.tokens_cache_read,
+                    delta.tokens_cache_write,
+                    mtime,
+                )?;
+                // Status transitions only make sense for live rows.
+                if alive && s.status != Status::Running {
+                    registry.set_status(&s.id, Status::Running)?;
+                }
+                report.usage_changed = true;
+
+                // Arm pending resume if claude reported a rate-limit.
+                // set_pending_resume is gated on auto_continue=1, below cap, AND
+                // ended_at IS NULL — so we must call it BEFORE mark_ended below.
+                if let Some(ev) = delta.limit_event {
+                    let reset_at = if ev.reset_at > 0 {
+                        ev.reset_at
+                    } else {
+                        // Sentinel 0 from usage_reader: apply the caller-side
+                        // fallback of "last activity + 5h + 60s of slack".
+                        mtime + 5 * 3600 + 60
+                    };
+                    registry.set_pending_resume(&s.id, reset_at)?;
+                }
+            } else if alive
+                && now - s.last_activity_at > cfg.idle_threshold_seconds as i64
+                && s.status != Status::Idle
+            {
+                registry.set_status(&s.id, Status::Idle)?;
             }
-        } else if now - s.last_activity_at > cfg.idle_threshold_seconds as i64
-            && s.status != Status::Idle
-        {
-            registry.set_status(&s.id, Status::Idle)?;
+        }
+
+        // Finally: mark ended if claude died. By this point, any pending resume
+        // has been armed via set_pending_resume; mark_ended no longer cascades
+        // a clear of next_resume_at so the fire loop can act on this row.
+        if !alive {
+            registry.mark_ended(&s.id, now)?;
+            report.ended_ids.push(s.id);
         }
     }
     Ok(report)
@@ -349,6 +361,8 @@ mod tests {
             resume_prompt: Some("keep going".into()),
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc-1234.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
@@ -394,6 +408,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
@@ -418,6 +434,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 1,
             resume_count: 1, // already at cap
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         let _ = r.set_pending_resume(&s.id, 500); // no-op due to cap check
@@ -443,6 +461,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
@@ -469,6 +489,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
@@ -506,6 +528,8 @@ mod tests {
                 resume_prompt: None,
                 resume_cap: 3,
                 resume_count: 0,
+                jsonl_path: None,
+                jsonl_offset: 0,
             })
             .unwrap();
         let dead = r
@@ -519,6 +543,8 @@ mod tests {
                 resume_prompt: None,
                 resume_cap: 3,
                 resume_count: 0,
+                jsonl_path: None,
+                jsonl_offset: 0,
             })
             .unwrap();
         let mut probe = FakeProbe([100u32].into_iter().collect());
@@ -529,6 +555,50 @@ mod tests {
         let active = r.list_active().unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, alive.id);
+    }
+
+    #[test]
+    fn tick_processes_jsonl_for_dead_claude_and_arms_resume() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use crate::session_registry::NewSession;
+
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
+        }).unwrap();
+
+        let mut jsonl = NamedTempFile::new().unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"5-hour limit reached, resets at 23:30"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+        ).unwrap();
+        jsonl.flush().unwrap();
+        r.set_jsonl_path(&s.id, &jsonl.path().to_string_lossy()).unwrap();
+        r.backdate_last_activity(&s.id, 1).unwrap();
+
+        // claude is DEAD (not in the alive set) — emulates the rate-limit case
+        // where claude exited after writing its final message.
+        let mut probe = FakeProbe(std::collections::HashSet::new());
+        let report = tick(&r, &mut probe, &cfg, 1000).unwrap();
+        assert_eq!(report.ended_ids.len(), 1, "session is marked ended");
+
+        let got = r.get(&s.id).unwrap();
+        assert!(got.ended_at.is_some(), "ended_at is set");
+        assert!(got.next_resume_at.is_some(),
+            "pending resume must be armed even though claude is dead — \
+             this is the restart-recovery and rate-limit-exit case");
     }
 
     #[test]
@@ -570,6 +640,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
 
         let mut jsonl = NamedTempFile::new().unwrap();
@@ -608,6 +680,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         let mut jsonl = NamedTempFile::new().unwrap();
         writeln!(
@@ -623,6 +697,43 @@ mod tests {
         let _ = tick(&r, &mut probe, &cfg, 1000).unwrap();
         let got = r.get(&s.id).unwrap();
         assert!(got.next_resume_at.is_none());
+    }
+
+    #[test]
+    fn successor_inherits_predecessor_jsonl() {
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(crate::session_registry::NewSession {
+            project_dir: "/p".into(),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
+        }).unwrap();
+        // Predecessor has a JSONL path and an advanced offset (already processed
+        // the limit-hit line and prior tokens).
+        r.set_jsonl_path(&s.id, "/tmp/abc-1234.jsonl").unwrap();
+        r.apply_usage_delta(&s.id, 5000, 0, 0, 0, 0, 100).unwrap();
+        r.set_pending_resume(&s.id, 500).unwrap();
+
+        let spawner = FakeSpawner::new(SpawnResult {
+            claude_pid: 42, terminal_pid: 41, terminal_window_handle: None,
+        });
+        fire_due_resumes(&r, &spawner, &cfg, 1000).unwrap();
+
+        let pred = r.get(&s.id).unwrap();
+        let new_id = pred.resumed_into.unwrap();
+        let succ = r.get(&new_id).unwrap();
+        assert_eq!(succ.jsonl_path.as_deref(), Some("/tmp/abc-1234.jsonl"),
+            "successor reuses predecessor's JSONL (claude --resume appends to same file)");
+        assert_eq!(succ.jsonl_offset, 5000,
+            "successor starts from where predecessor left off so we don't re-tally");
     }
 
     #[test]
@@ -643,6 +754,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         let mut jsonl = NamedTempFile::new().unwrap();
         writeln!(

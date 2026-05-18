@@ -87,6 +87,12 @@ pub struct NewSession {
     /// Initial resume_count. Non-zero only for rows created as the
     /// continuation of a previous auto-resume (predecessor.resume_count + 1).
     pub resume_count: i64,
+    /// If Some, the new row inherits this JSONL path (used when claude --resume
+    /// reuses the predecessor's conversation file). None for fresh launches.
+    pub jsonl_path: Option<String>,
+    /// Starting byte offset for the inherited JSONL. Set so the poller doesn't
+    /// re-tally the predecessor's tokens or re-detect its limit event.
+    pub jsonl_offset: i64,
 }
 
 pub struct Registry {
@@ -186,8 +192,8 @@ impl Registry {
             terminal_window_handle: n.terminal_window_handle,
             started_at: now,
             ended_at: None,
-            jsonl_path: None,
-            jsonl_offset: 0,
+            jsonl_path: n.jsonl_path,
+            jsonl_offset: n.jsonl_offset,
             status: Status::Running,
             last_activity_at: now,
             tokens_in: 0,
@@ -208,13 +214,15 @@ impl Registry {
             INSERT INTO sessions
                 (id, project_dir, model, claude_pid, terminal_pid, terminal_window_handle,
                  started_at, status, last_activity_at,
-                 auto_continue, resume_prompt, resume_count, resume_cap)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                 auto_continue, resume_prompt, resume_count, resume_cap,
+                 jsonl_path, jsonl_offset)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             "#,
             params![
                 s.id, s.project_dir, s.model, s.claude_pid, s.terminal_pid,
                 s.terminal_window_handle, s.started_at, s.status.as_str(), s.last_activity_at,
                 s.auto_continue as i64, s.resume_prompt, s.resume_count, s.resume_cap,
+                s.jsonl_path, s.jsonl_offset,
             ],
         )?;
         Ok(s)
@@ -334,7 +342,7 @@ impl Registry {
         let conn = self.conn.lock().unwrap();
         let n = conn.execute(
             "UPDATE sessions
-                SET ended_at = ?1, status = 'ended', next_resume_at = NULL
+                SET ended_at = ?1, status = 'ended'
               WHERE id = ?2",
             params![ended_at, id],
         )?;
@@ -611,6 +619,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }
     }
 
@@ -765,6 +775,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 0,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         };
         let s = r.insert(bad).unwrap();
         assert_eq!(s.resume_cap, 3, "0 must trip the fallback, not persist as 0");
@@ -829,6 +841,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         let _disarmed = r.insert(new_sess("/b")).unwrap();
         r.set_pending_resume(&armed.id, 1000).unwrap();
@@ -844,6 +858,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 1,
             resume_count: 1,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_pending_resume(&capped.id, 1000).unwrap();
 
@@ -869,6 +885,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_pending_resume(&s.id, 1000).unwrap();
         r.record_resume_failure(&s.id, 5000).unwrap(); // bump failures, set retry
@@ -892,6 +910,8 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_pending_resume(&s.id, 1000).unwrap();
         r.record_resume_failure(&s.id, 5000).unwrap();
@@ -901,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn mark_ended_clears_pending_resume() {
+    fn mark_ended_preserves_pending_resume() {
         let r = make();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
@@ -913,10 +933,15 @@ mod tests {
             resume_prompt: None,
             resume_cap: 3,
             resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
         }).unwrap();
         r.set_pending_resume(&s.id, 1000).unwrap();
         r.mark_ended(&s.id, 9999).unwrap();
-        assert_eq!(r.get(&s.id).unwrap().next_resume_at, None);
+        // mark_ended must preserve next_resume_at so the fire loop can act on
+        // sessions whose claude died at the rate limit. User-initiated kills
+        // clear it explicitly via set_auto_continue(false).
+        assert_eq!(r.get(&s.id).unwrap().next_resume_at, Some(1000));
     }
 
     #[test]
