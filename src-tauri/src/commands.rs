@@ -78,6 +78,10 @@ pub fn launch_session(
         claude_pid: result.claude_pid,
         terminal_pid: result.terminal_pid,
         terminal_window_handle: result.terminal_window_handle,
+        auto_continue: false,
+        resume_prompt: None,
+        resume_cap: 3,
+        resume_count: 0,
     })?;
     let _ = app.emit("session-changed", &session);
     Ok(session)

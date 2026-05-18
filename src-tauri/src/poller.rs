@@ -201,6 +201,10 @@ mod tests {
                 claude_pid: 100,
                 terminal_pid: 99,
                 terminal_window_handle: None,
+                auto_continue: false,
+                resume_prompt: None,
+                resume_cap: 3,
+                resume_count: 0,
             })
             .unwrap();
         let dead = r
@@ -210,6 +214,10 @@ mod tests {
                 claude_pid: 200,
                 terminal_pid: 199,
                 terminal_window_handle: None,
+                auto_continue: false,
+                resume_prompt: None,
+                resume_cap: 3,
+                resume_count: 0,
             })
             .unwrap();
         let mut probe = FakeProbe([100u32].into_iter().collect());

@@ -63,6 +63,14 @@ pub struct Session {
     pub tokens_out: i64,
     pub tokens_cache_read: i64,
     pub tokens_cache_write: i64,
+    // NEW — auto-continue feature
+    pub auto_continue: bool,
+    pub resume_prompt: Option<String>,
+    pub next_resume_at: Option<i64>,
+    pub resume_count: i64,
+    pub resume_cap: i64,
+    pub resumed_into: Option<String>,
+    pub resume_failures: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -72,11 +80,24 @@ pub struct NewSession {
     pub claude_pid: i64,
     pub terminal_pid: i64,
     pub terminal_window_handle: Option<String>,
+    // NEW — defaults applied at insert time if zero/empty
+    pub auto_continue: bool,
+    pub resume_prompt: Option<String>,
+    pub resume_cap: i64,
+    /// Initial resume_count. Non-zero only for rows created as the
+    /// continuation of a previous auto-resume (predecessor.resume_count + 1).
+    pub resume_count: i64,
 }
 
 pub struct Registry {
     conn: Mutex<Connection>,
 }
+
+const SESSION_COLS: &str = "id, project_dir, model, claude_pid, terminal_pid, \
+    terminal_window_handle, started_at, ended_at, jsonl_path, jsonl_offset, \
+    status, last_activity_at, tokens_in, tokens_out, tokens_cache_read, \
+    tokens_cache_write, auto_continue, resume_prompt, next_resume_at, \
+    resume_count, resume_cap, resumed_into, resume_failures";
 
 impl Registry {
     pub fn open(path: &Path) -> AppResult<Self> {
@@ -113,18 +134,42 @@ impl Registry {
                 tokens_in INTEGER NOT NULL DEFAULT 0,
                 tokens_out INTEGER NOT NULL DEFAULT 0,
                 tokens_cache_read INTEGER NOT NULL DEFAULT 0,
-                tokens_cache_write INTEGER NOT NULL DEFAULT 0
+                tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+                auto_continue INTEGER NOT NULL DEFAULT 0,
+                resume_prompt TEXT,
+                next_resume_at INTEGER,
+                resume_count INTEGER NOT NULL DEFAULT 0,
+                resume_cap INTEGER NOT NULL DEFAULT 3,
+                resumed_into TEXT,
+                resume_failures INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_active
               ON sessions(ended_at) WHERE ended_at IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_sessions_pending_resume
+              ON sessions(next_resume_at) WHERE next_resume_at IS NOT NULL;
             "#,
         )?;
+        // Migrations for existing DBs. Each ALTER is wrapped so a duplicate-column
+        // error on re-run is silently ignored.
+        let migrations = [
+            "ALTER TABLE sessions ADD COLUMN auto_continue INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN resume_prompt TEXT",
+            "ALTER TABLE sessions ADD COLUMN next_resume_at INTEGER",
+            "ALTER TABLE sessions ADD COLUMN resume_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN resume_cap INTEGER NOT NULL DEFAULT 3",
+            "ALTER TABLE sessions ADD COLUMN resumed_into TEXT",
+            "ALTER TABLE sessions ADD COLUMN resume_failures INTEGER NOT NULL DEFAULT 0",
+        ];
+        for sql in migrations {
+            let _ = conn.execute(sql, []);
+        }
         Ok(())
     }
 
     pub fn insert(&self, n: NewSession) -> AppResult<Session> {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
+        let resume_cap = if n.resume_cap > 0 { n.resume_cap } else { 3 };
         let s = Session {
             id: id.clone(),
             project_dir: n.project_dir,
@@ -142,18 +187,27 @@ impl Registry {
             tokens_out: 0,
             tokens_cache_read: 0,
             tokens_cache_write: 0,
+            auto_continue: n.auto_continue,
+            resume_prompt: n.resume_prompt,
+            next_resume_at: None,
+            resume_count: n.resume_count,
+            resume_cap,
+            resumed_into: None,
+            resume_failures: 0,
         };
         let conn = self.conn.lock().unwrap();
         conn.execute(
             r#"
             INSERT INTO sessions
                 (id, project_dir, model, claude_pid, terminal_pid, terminal_window_handle,
-                 started_at, status, last_activity_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 started_at, status, last_activity_at,
+                 auto_continue, resume_prompt, resume_count, resume_cap)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             "#,
             params![
                 s.id, s.project_dir, s.model, s.claude_pid, s.terminal_pid,
                 s.terminal_window_handle, s.started_at, s.status.as_str(), s.last_activity_at,
+                s.auto_continue as i64, s.resume_prompt, s.resume_count, s.resume_cap,
             ],
         )?;
         Ok(s)
@@ -191,10 +245,7 @@ impl Registry {
     fn list_where(&self, where_clause: &str) -> AppResult<Vec<Session>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
-            "SELECT id, project_dir, model, claude_pid, terminal_pid, terminal_window_handle,
-                    started_at, ended_at, jsonl_path, jsonl_offset, status, last_activity_at,
-                    tokens_in, tokens_out, tokens_cache_read, tokens_cache_write
-             FROM sessions WHERE {where_clause}"
+            "SELECT {SESSION_COLS} FROM sessions WHERE {where_clause}"
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], row_to_session)?;
@@ -207,12 +258,8 @@ impl Registry {
 
     pub fn get(&self, id: &str) -> AppResult<Session> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, project_dir, model, claude_pid, terminal_pid, terminal_window_handle,
-                    started_at, ended_at, jsonl_path, jsonl_offset, status, last_activity_at,
-                    tokens_in, tokens_out, tokens_cache_read, tokens_cache_write
-             FROM sessions WHERE id = ?1",
-        )?;
+        let sql = format!("SELECT {SESSION_COLS} FROM sessions WHERE id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
             Ok(row_to_session(row)?)
@@ -371,6 +418,13 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         tokens_out: row.get(13)?,
         tokens_cache_read: row.get(14)?,
         tokens_cache_write: row.get(15)?,
+        auto_continue: row.get::<_, i64>(16)? != 0,
+        resume_prompt: row.get(17)?,
+        next_resume_at: row.get(18)?,
+        resume_count: row.get(19)?,
+        resume_cap: row.get(20)?,
+        resumed_into: row.get(21)?,
+        resume_failures: row.get(22)?,
     })
 }
 
@@ -389,6 +443,10 @@ mod tests {
             claude_pid: 1234,
             terminal_pid: 1230,
             terminal_window_handle: Some("hwnd-abc".into()),
+            auto_continue: false,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
         }
     }
 
@@ -515,5 +573,18 @@ mod tests {
         let s = r.insert(new_sess("/p")).unwrap();
         r.set_jsonl_path(&s.id, "/some/path.jsonl").unwrap();
         assert_eq!(r.get(&s.id).unwrap().jsonl_path.as_deref(), Some("/some/path.jsonl"));
+    }
+
+    #[test]
+    fn insert_defaults_auto_continue_fields() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        assert!(!s.auto_continue);
+        assert_eq!(s.resume_prompt, None);
+        assert_eq!(s.next_resume_at, None);
+        assert_eq!(s.resume_count, 0);
+        assert!(s.resume_cap >= 1, "default cap must be at least 1");
+        assert_eq!(s.resumed_into, None);
+        assert_eq!(s.resume_failures, 0);
     }
 }
