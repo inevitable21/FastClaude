@@ -15,8 +15,24 @@ pub struct FireReport {
 }
 
 const RESUME_BACKOFF_SECS: i64 = 5 * 60;
-const RESUME_FAILURE_GIVE_UP: i64 = 3;
+const RESUME_MAX_FAILURES: i64 = 3;
 
+/// Fires all due auto-resumes: rows whose `next_resume_at` has passed
+/// and that are still below their `resume_cap`.
+///
+/// For each row: derives the claude session UUID from the JSONL filename
+/// stem, spawns `claude --resume <uuid>` with the per-session or global
+/// resume prompt, inserts a successor row inheriting the cap (and
+/// `resume_count + 1`), and links predecessor → successor via
+/// `record_resume_success`.
+///
+/// On spawn failure, schedules a 5-minute retry. After
+/// `RESUME_MAX_FAILURES` consecutive failures the row is marked as
+/// permanently given up — the user can re-toggle auto-continue to reset
+/// the failure count.
+///
+/// Called every poller tick after the liveness check; tick errors are
+/// surfaced via the eprintln in `run_loop` and do not abort the loop.
 pub fn fire_due_resumes(
     registry: &Registry,
     spawner: &dyn crate::spawner::Spawner,
@@ -66,9 +82,8 @@ pub fn fire_due_resumes(
             Err(e) => {
                 let msg = format!("{e}");
                 let new_failures = s.resume_failures + 1;
-                if new_failures >= RESUME_FAILURE_GIVE_UP {
-                    registry.record_resume_failure(&s.id, now)?;
-                    registry.give_up_resume(&s.id)?;
+                if new_failures >= RESUME_MAX_FAILURES {
+                    registry.record_final_failure(&s.id)?;
                     report.gave_up_ids.push(s.id.clone());
                 } else {
                     registry.record_resume_failure(&s.id, now + RESUME_BACKOFF_SECS)?;
@@ -313,6 +328,13 @@ mod tests {
         }
     }
 
+    struct FailingSpawner;
+    impl Spawner for FailingSpawner {
+        fn spawn(&self, _req: &SpawnRequest) -> ResumeResult<SpawnResult> {
+            Err(crate::error::AppError::Spawn("nope".into()))
+        }
+    }
+
     #[test]
     fn fires_due_resume_and_creates_successor_row() {
         let r = Registry::open_in_memory().unwrap();
@@ -425,12 +447,6 @@ mod tests {
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
 
-        struct FailingSpawner;
-        impl Spawner for FailingSpawner {
-            fn spawn(&self, _req: &SpawnRequest) -> ResumeResult<SpawnResult> {
-                Err(crate::error::AppError::Spawn("nope".into()))
-            }
-        }
         let report = fire_due_resumes(&r, &FailingSpawner, &cfg, 1000).unwrap();
         assert!(report.fired_ids.is_empty());
         assert_eq!(report.failed_ids.len(), 1);
@@ -457,12 +473,6 @@ mod tests {
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
 
-        struct FailingSpawner;
-        impl Spawner for FailingSpawner {
-            fn spawn(&self, _req: &SpawnRequest) -> ResumeResult<SpawnResult> {
-                Err(crate::error::AppError::Spawn("nope".into()))
-            }
-        }
         let mut now = 1000i64;
         for _ in 0..3 {
             let _ = fire_due_resumes(&r, &FailingSpawner, &cfg, now).unwrap();

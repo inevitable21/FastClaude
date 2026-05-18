@@ -492,6 +492,25 @@ impl Registry {
         Ok(())
     }
 
+    /// Records a terminal failure: increments `resume_failures` AND clears
+    /// `next_resume_at` in a single UPDATE. Use when the cap of consecutive
+    /// failures has been reached — the session should not retry without
+    /// being manually re-armed.
+    pub fn record_final_failure(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sessions
+                SET resume_failures = resume_failures + 1,
+                    next_resume_at = NULL
+              WHERE id = ?1",
+            params![id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn apply_usage_delta(
         &self,

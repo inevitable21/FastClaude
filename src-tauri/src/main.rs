@@ -136,7 +136,7 @@ fn main() {
                             let _ = app_handle.emit("auto-continue-gave-up", id);
                         }
                         if any_change {
-                            let _ = app_handle.emit("session-changed", &tick_report.ended_ids);
+                            let _ = app_handle.emit("session-changed", ());
                         }
                     },
                 )
