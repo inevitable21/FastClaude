@@ -333,7 +333,9 @@ impl Registry {
     pub fn mark_ended(&self, id: &str, ended_at: i64) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let n = conn.execute(
-            "UPDATE sessions SET ended_at = ?1, status = 'ended' WHERE id = ?2",
+            "UPDATE sessions
+                SET ended_at = ?1, status = 'ended', next_resume_at = NULL
+              WHERE id = ?2",
             params![ended_at, id],
         )?;
         if n == 0 {
@@ -359,6 +361,101 @@ impl Registry {
         let n = conn.execute(
             "UPDATE sessions SET jsonl_path = ?1 WHERE id = ?2",
             params![path, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn set_auto_continue(&self, id: &str, on: bool) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql = if on {
+            "UPDATE sessions SET auto_continue = 1 WHERE id = ?1"
+        } else {
+            // Disarming clears any pending resume so the fire loop won't act.
+            "UPDATE sessions SET auto_continue = 0, next_resume_at = NULL WHERE id = ?1"
+        };
+        let n = conn.execute(sql, params![id])?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn set_resume_prompt(&self, id: &str, prompt: Option<&str>) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sessions SET resume_prompt = ?1 WHERE id = ?2",
+            params![prompt, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
+    /// Persist `next_resume_at` only if the row is armed, active, and below cap.
+    /// Returns true when it actually changed the row.
+    pub fn set_pending_resume(&self, id: &str, reset_at: i64) -> AppResult<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sessions SET next_resume_at = ?1
+             WHERE id = ?2 AND auto_continue = 1
+               AND resume_count < resume_cap
+               AND ended_at IS NULL",
+            params![reset_at, id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Rows whose pending resume time has passed and are eligible to fire.
+    pub fn list_due_resumes(&self, now: i64) -> AppResult<Vec<Session>> {
+        self.list_where(&format!(
+            "auto_continue = 1
+               AND next_resume_at IS NOT NULL
+               AND next_resume_at <= {now}
+               AND resume_count < resume_cap
+             ORDER BY next_resume_at ASC"
+        ))
+    }
+
+    pub fn record_resume_success(&self, id: &str, new_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sessions
+                SET resumed_into = ?1,
+                    next_resume_at = NULL,
+                    resume_failures = 0
+              WHERE id = ?2",
+            params![new_id, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn record_resume_failure(&self, id: &str, next_retry_at: i64) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sessions
+                SET resume_failures = resume_failures + 1,
+                    next_resume_at = ?1
+              WHERE id = ?2",
+            params![next_retry_at, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn give_up_resume(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sessions SET next_resume_at = NULL WHERE id = ?1",
+            params![id],
         )?;
         if n == 0 {
             return Err(AppError::NotFound(format!("session {id}")));
@@ -611,6 +708,155 @@ mod tests {
         };
         let s = r.insert(bad).unwrap();
         assert_eq!(s.resume_cap, 3, "0 must trip the fallback, not persist as 0");
+    }
+
+    #[test]
+    fn set_auto_continue_persists() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        r.set_auto_continue(&s.id, true).unwrap();
+        assert!(r.get(&s.id).unwrap().auto_continue);
+        r.set_auto_continue(&s.id, false).unwrap();
+        assert!(!r.get(&s.id).unwrap().auto_continue);
+    }
+
+    #[test]
+    fn set_auto_continue_off_clears_pending_resume() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        r.set_auto_continue(&s.id, true).unwrap();
+        r.set_pending_resume(&s.id, 2000).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().next_resume_at, Some(2000));
+        r.set_auto_continue(&s.id, false).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().next_resume_at, None);
+    }
+
+    #[test]
+    fn set_resume_prompt_persists() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        r.set_resume_prompt(&s.id, Some("keep going")).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().resume_prompt.as_deref(), Some("keep going"));
+        r.set_resume_prompt(&s.id, None).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().resume_prompt, None);
+    }
+
+    #[test]
+    fn set_pending_resume_only_when_auto_continue_on() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        // auto_continue is false by default → set_pending_resume is a no-op.
+        let changed = r.set_pending_resume(&s.id, 2000).unwrap();
+        assert!(!changed, "must not arm a session that hasn't opted in");
+        assert_eq!(r.get(&s.id).unwrap().next_resume_at, None);
+
+        r.set_auto_continue(&s.id, true).unwrap();
+        let changed = r.set_pending_resume(&s.id, 2000).unwrap();
+        assert!(changed);
+        assert_eq!(r.get(&s.id).unwrap().next_resume_at, Some(2000));
+    }
+
+    #[test]
+    fn list_due_resumes_filters_correctly() {
+        let r = make();
+        let armed = r.insert(NewSession {
+            project_dir: "/a".into(),
+            model: "m".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        let _disarmed = r.insert(new_sess("/b")).unwrap();
+        r.set_pending_resume(&armed.id, 1000).unwrap();
+
+        // Cap-reached row: armed but resume_count == resume_cap
+        let capped = r.insert(NewSession {
+            project_dir: "/c".into(),
+            model: "m".into(),
+            claude_pid: 3,
+            terminal_pid: 4,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 1,
+            resume_count: 1,
+        }).unwrap();
+        r.set_pending_resume(&capped.id, 1000).unwrap();
+
+        let due = r.list_due_resumes(1500).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].id, armed.id);
+
+        // Future reset time → not due
+        let due = r.list_due_resumes(500).unwrap();
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn record_resume_success_clears_pending_and_resets_failures() {
+        let r = make();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "m".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        r.set_pending_resume(&s.id, 1000).unwrap();
+        r.record_resume_failure(&s.id, 5000).unwrap(); // bump failures, set retry
+        r.record_resume_success(&s.id, "new-id").unwrap();
+        let got = r.get(&s.id).unwrap();
+        assert_eq!(got.next_resume_at, None);
+        assert_eq!(got.resume_failures, 0);
+        assert_eq!(got.resumed_into.as_deref(), Some("new-id"));
+    }
+
+    #[test]
+    fn record_resume_failure_increments_and_sets_next_retry() {
+        let r = make();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "m".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        r.set_pending_resume(&s.id, 1000).unwrap();
+        r.record_resume_failure(&s.id, 5000).unwrap();
+        let got = r.get(&s.id).unwrap();
+        assert_eq!(got.resume_failures, 1);
+        assert_eq!(got.next_resume_at, Some(5000));
+    }
+
+    #[test]
+    fn mark_ended_clears_pending_resume() {
+        let r = make();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "m".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+        }).unwrap();
+        r.set_pending_resume(&s.id, 1000).unwrap();
+        r.mark_ended(&s.id, 9999).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().next_resume_at, None);
     }
 
     #[test]
