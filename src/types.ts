@@ -17,6 +17,13 @@ export interface Session {
   tokens_out: number;
   tokens_cache_read: number;
   tokens_cache_write: number;
+  auto_continue: boolean;
+  resume_prompt: string | null;
+  next_resume_at: number | null;
+  resume_count: number;
+  resume_cap: number;
+  resumed_into: string | null;
+  resume_failures: number;
 }
 
 export interface RecentProject {
@@ -39,6 +46,9 @@ export interface AppConfig {
   default_prompt: string;
   launch_on_login: boolean;
   launch_mode: LaunchMode;
+  default_auto_continue: boolean;
+  default_resume_prompt: string;
+  default_resume_cap: number;
 }
 
 export interface LaunchInput {
@@ -49,6 +59,8 @@ export interface LaunchInput {
   effort?: string;
   permission_mode?: string;
   extra_args?: string;
+  auto_continue?: boolean;
+  resume_prompt?: string;
 }
 
 export interface UpdateInfo {

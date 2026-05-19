@@ -73,3 +73,27 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
 export async function installUpdate(): Promise<void> {
   return invoke<void>("install_update");
 }
+
+export async function setAutoContinue(id: string, on: boolean): Promise<void> {
+  return invoke<void>("set_auto_continue", { id, on });
+}
+
+export async function setResumePrompt(id: string, prompt: string | null): Promise<void> {
+  return invoke<void>("set_resume_prompt", { id, prompt });
+}
+
+export async function onAutoContinueFired(handler: (id: string) => void): Promise<UnlistenFn> {
+  return listen<string>("auto-continue-fired", (e) => handler(e.payload));
+}
+
+export async function onAutoContinueFailed(
+  handler: (payload: { id: string; error: string }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ id: string; error: string }>("auto-continue-failed", (e) => handler(e.payload));
+}
+
+export async function onAutoContinueGaveUp(
+  handler: (id: string) => void,
+): Promise<UnlistenFn> {
+  return listen<string>("auto-continue-gave-up", (e) => handler(e.payload));
+}

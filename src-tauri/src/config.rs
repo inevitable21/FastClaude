@@ -45,7 +45,21 @@ pub struct Config {
     /// (Read on every boot from the loaded config.)
     #[serde(default)]
     pub launch_mode: LaunchMode,
+    /// Default state for the LaunchDialog's auto-continue checkbox.
+    #[serde(default)]
+    pub default_auto_continue: bool,
+    /// Default prompt sent to claude when an auto-resume fires.
+    /// Per-session `resume_prompt` overrides this at fire time.
+    #[serde(default = "default_resume_prompt_value")]
+    pub default_resume_prompt: String,
+    /// Max auto-resumes per session chain. Frozen onto new sessions at
+    /// launch time so a later change does not retroactively re-arm.
+    #[serde(default = "default_resume_cap_value")]
+    pub default_resume_cap: i64,
 }
+
+fn default_resume_prompt_value() -> String { "continue".into() }
+fn default_resume_cap_value() -> i64 { 3 }
 
 impl Default for Config {
     fn default() -> Self {
@@ -60,6 +74,9 @@ impl Default for Config {
             default_prompt: String::new(),
             launch_on_login: false,
             launch_mode: LaunchMode::Window,
+            default_auto_continue: false,
+            default_resume_prompt: default_resume_prompt_value(),
+            default_resume_cap: default_resume_cap_value(),
         }
     }
 }
@@ -198,5 +215,29 @@ mod tests {
         let cfg = Config::default();
         assert!(!cfg.launch_on_login);
         assert_eq!(cfg.launch_mode, LaunchMode::Window);
+    }
+
+    #[test]
+    fn config_default_has_auto_continue_off_and_cap_three() {
+        let cfg = Config::default();
+        assert!(!cfg.default_auto_continue);
+        assert_eq!(cfg.default_resume_prompt, "continue");
+        assert_eq!(cfg.default_resume_cap, 3);
+    }
+
+    #[test]
+    fn load_defaults_auto_continue_fields_when_missing() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("c.json");
+        std::fs::write(
+            &path,
+            br#"{"terminal_program":"auto","default_model":"claude-opus-4-7",
+                "hotkey":"Ctrl+Shift+C","idle_threshold_seconds":300}"#,
+        ).unwrap();
+        let (cfg, _) = load(&path).unwrap();
+        assert!(!cfg.default_auto_continue);
+        assert_eq!(cfg.default_resume_prompt, "continue");
+        assert_eq!(cfg.default_resume_cap, 3);
     }
 }

@@ -12,7 +12,7 @@ use tauri::{Emitter, State};
 
 pub struct AppState {
     pub registry: Arc<Registry>,
-    pub spawner: Box<dyn Spawner>,
+    pub spawner: Arc<dyn Spawner>,
     pub focus: Box<dyn WindowFocus>,
     pub config: Arc<Mutex<Config>>,
     pub config_path: PathBuf,
@@ -37,6 +37,13 @@ pub struct LaunchInput {
     /// Per-launch override for free-form extra args. None = use config default.
     #[serde(default)]
     pub extra_args: Option<String>,
+    /// NEW — pre-arm auto-continue at launch. None = use config default.
+    #[serde(default)]
+    pub auto_continue: Option<bool>,
+    /// NEW — per-session override of the resume prompt. None at launch
+    /// time means "fall back to config.default_resume_prompt at fire time".
+    #[serde(default)]
+    pub resume_prompt: Option<String>,
 }
 
 #[tauri::command]
@@ -78,6 +85,12 @@ pub fn launch_session(
         claude_pid: result.claude_pid,
         terminal_pid: result.terminal_pid,
         terminal_window_handle: result.terminal_window_handle,
+        auto_continue: input.auto_continue.unwrap_or(cfg.default_auto_continue),
+        resume_prompt: input.resume_prompt,
+        resume_cap: cfg.default_resume_cap,
+        resume_count: 0,
+        jsonl_path: None,
+        jsonl_offset: 0,
     })?;
     let _ = app.emit("session-changed", &session);
     Ok(session)
@@ -100,6 +113,11 @@ pub fn kill_session(app: tauri::AppHandle, state: State<'_, AppState>, id: Strin
     );
     sys.refresh_processes();
     kill_session_chain(&sys, s.claude_pid as u32);
+    // User-initiated kill: explicitly clear auto-continue so this session
+    // won't auto-resume. mark_ended no longer cascades this clear (that's
+    // reserved for poller-detected deaths where we WANT the pending resume
+    // to survive into fire_due_resumes).
+    let _ = state.registry.set_auto_continue(&id, false);
     state
         .registry
         .mark_ended(&id, chrono::Utc::now().timestamp())?;
@@ -205,6 +223,30 @@ pub fn focus_session(state: State<'_, AppState>, id: String) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn set_auto_continue(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    on: bool,
+) -> AppResult<()> {
+    state.registry.set_auto_continue(&id, on)?;
+    let _ = app.emit("session-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_resume_prompt(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    prompt: Option<String>,
+) -> AppResult<()> {
+    state.registry.set_resume_prompt(&id, prompt.as_deref())?;
+    let _ = app.emit("session-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
 pub fn recent_projects(state: State<'_, AppState>, limit: usize) -> AppResult<Vec<RecentProject>> {
     let root = recent_projects::default_claude_root()?;
     let launches = state.registry.last_launch_per_dir()?;
@@ -304,4 +346,79 @@ pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
         .await
         .map_err(|e| crate::error::AppError::Other(format!("install failed: {e}")))?;
     app.restart();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_registry::{NewSession, Registry};
+
+    #[test]
+    fn launch_input_carries_auto_continue_flags() {
+        let json = r#"{
+            "project_dir": "/p",
+            "auto_continue": true,
+            "resume_prompt": "keep at it"
+        }"#;
+        let parsed: LaunchInput = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.auto_continue, Some(true));
+        assert_eq!(parsed.resume_prompt.as_deref(), Some("keep at it"));
+    }
+
+    #[test]
+    fn launch_input_defaults_are_none_when_omitted() {
+        let json = r#"{ "project_dir": "/p" }"#;
+        let parsed: LaunchInput = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.auto_continue, None);
+        assert_eq!(parsed.resume_prompt, None);
+    }
+
+    #[test]
+    fn registry_arm_disarm_through_methods_used_by_commands() {
+        let r = Registry::open_in_memory().unwrap();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "m".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: false,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
+        }).unwrap();
+        r.set_auto_continue(&s.id, true).unwrap();
+        assert!(r.get(&s.id).unwrap().auto_continue);
+        r.set_resume_prompt(&s.id, Some("keep going")).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().resume_prompt.as_deref(), Some("keep going"));
+    }
+
+    #[test]
+    fn user_kill_disarms_auto_continue() {
+        let r = Registry::open_in_memory().unwrap();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            model: "m".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: true,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
+        }).unwrap();
+        r.set_pending_resume(&s.id, 5000).unwrap();
+        // The kill_session command, conceptually: disarm first, then mark ended.
+        // We test the registry-level invariant rather than the full IPC path.
+        r.set_auto_continue(&s.id, false).unwrap();
+        r.mark_ended(&s.id, 9999).unwrap();
+        let got = r.get(&s.id).unwrap();
+        assert!(!got.auto_continue, "auto_continue is off");
+        assert_eq!(got.next_resume_at, None,
+            "user kill must clear pending resume so we don't auto-resume after manual kill");
+    }
 }
