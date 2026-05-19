@@ -219,3 +219,66 @@ mod tests {
         assert!(p.contains("Refactor auth"));
     }
 }
+
+/// Production runner — spawns `claude -p <prompt> --model <model> --output-format json`
+/// in the system temp directory and reads stdout to completion (or until
+/// `timeout` elapses, in which case the child is killed and an error returned).
+pub struct RealRunner;
+
+impl PlannerRunner for RealRunner {
+    fn run(&self, prompt: &str, model: &str, timeout: Duration) -> AppResult<String> {
+        use std::process::{Command, Stdio};
+        use std::io::Read;
+        let tmp = std::env::temp_dir();
+        let mut child = Command::new("claude")
+            .arg("-p")
+            .arg(prompt)
+            .arg("--model")
+            .arg(model)
+            .arg("--output-format")
+            .arg("json")
+            .current_dir(&tmp)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => AppError::ClaudeNotOnPath,
+                _ => AppError::Spawn(format!("spawn claude: {e}")),
+            })?;
+
+        // Manual deadline: poll `try_wait` until timeout, kill if still running.
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_status)) => break,
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(AppError::PlannerFailed(format!(
+                            "planner timed out after {}s",
+                            timeout.as_secs()
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(AppError::PlannerFailed(format!("wait error: {e}"))),
+            }
+        }
+        let mut out = String::new();
+        if let Some(mut s) = child.stdout.take() {
+            let _ = s.read_to_string(&mut out);
+        }
+        if out.trim().is_empty() {
+            let mut err_s = String::new();
+            if let Some(mut e) = child.stderr.take() {
+                let _ = e.read_to_string(&mut err_s);
+            }
+            return Err(AppError::PlannerFailed(format!(
+                "planner produced no stdout (stderr: {})",
+                err_s.trim()
+            )));
+        }
+        Ok(out)
+    }
+}
