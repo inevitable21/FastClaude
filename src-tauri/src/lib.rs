@@ -3,6 +3,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod launch_args;
+pub mod planner;
 pub mod poller;
 pub mod projects;
 pub mod recent_projects;
