@@ -708,6 +708,52 @@ pub fn launch_all_subtasks(
     Ok(out)
 }
 
+/// Recomputes a TODO's `state` and `auto_suggest_done_at` based on the
+/// current status of its child subtasks' sessions. Idempotent.
+pub fn recompute_todo_for_session(
+    registry: &Registry,
+    todos: &Todos,
+    session_id: &str,
+) -> AppResult<Option<String>> {
+    // Find the subtask, if any.
+    let session = registry.get(session_id)?;
+    let Some(subtask_id) = session.subtask_id.clone() else {
+        return Ok(None);
+    };
+    let subtask = todos.get_subtask(&subtask_id)?;
+    let todo = todos.get_todo(&subtask.todo_id)?;
+    if matches!(todo.state, crate::todos::TodoState::Finished) {
+        return Ok(Some(todo.id));
+    }
+    let siblings = todos.list_subtasks(&subtask.todo_id)?;
+    let mut all_launched = true;
+    let mut any_running = false;
+    for s in &siblings {
+        match &s.session_id {
+            None => all_launched = false,
+            Some(sid) => {
+                if let Ok(sess) = registry.get(sid) {
+                    if sess.ended_at.is_none() {
+                        any_running = true;
+                    }
+                }
+            }
+        }
+    }
+    let now = chrono::Utc::now().timestamp();
+    if any_running {
+        todos.set_state(&todo.id, crate::todos::TodoState::Ongoing)?;
+        todos.set_auto_suggest_done_at(&todo.id, None)?;
+    } else if all_launched {
+        todos.set_state(&todo.id, crate::todos::TodoState::Pending)?;
+        todos.set_auto_suggest_done_at(&todo.id, Some(now))?;
+    } else {
+        todos.set_state(&todo.id, crate::todos::TodoState::Pending)?;
+        todos.set_auto_suggest_done_at(&todo.id, None)?;
+    }
+    Ok(Some(todo.id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -127,6 +127,8 @@ fn main() {
             let registry_for_poller = registry.clone();
             let cfg_for_poller = cfg_arc.clone();
             let spawner_for_poller = spawner_arc.clone();
+            let todos_for_poller = todos_reg.clone();
+            let registry_for_closure = registry.clone();
             tauri::async_runtime::spawn(async move {
                 poller::run_loop(
                     registry_for_poller,
@@ -139,6 +141,15 @@ fn main() {
                             || !fire_report.fired_ids.is_empty()
                             || !fire_report.failed_ids.is_empty()
                             || !fire_report.gave_up_ids.is_empty();
+                        for ended_id in &tick_report.ended_ids {
+                            if let Ok(Some(todo_id)) = fastclaude_lib::commands::recompute_todo_for_session(
+                                &registry_for_closure,
+                                &todos_for_poller,
+                                ended_id,
+                            ) {
+                                let _ = app_handle.emit("todo-changed", &todo_id);
+                            }
+                        }
                         for id in &fire_report.fired_ids {
                             let _ = app_handle.emit("auto-continue-fired", id);
                         }
