@@ -91,6 +91,7 @@ pub fn launch_session(
         resume_count: 0,
         jsonl_path: None,
         jsonl_offset: 0,
+        subtask_id: None,
     })?;
     let _ = app.emit("session-changed", &session);
     Ok(session)
@@ -388,6 +389,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_auto_continue(&s.id, true).unwrap();
         assert!(r.get(&s.id).unwrap().auto_continue);
@@ -410,6 +412,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_pending_resume(&s.id, 5000).unwrap();
         // The kill_session command, conceptually: disarm first, then mark ended.

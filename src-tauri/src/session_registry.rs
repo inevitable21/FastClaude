@@ -71,6 +71,7 @@ pub struct Session {
     pub resume_cap: i64,
     pub resumed_into: Option<String>,
     pub resume_failures: i64,
+    pub subtask_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +94,7 @@ pub struct NewSession {
     /// Starting byte offset for the inherited JSONL. Set so the poller doesn't
     /// re-tally the predecessor's tokens or re-detect its limit event.
     pub jsonl_offset: i64,
+    pub subtask_id: Option<String>,
 }
 
 pub struct Registry {
@@ -103,7 +105,7 @@ const SESSION_COLS: &str = "id, project_dir, model, claude_pid, terminal_pid, \
     terminal_window_handle, started_at, ended_at, jsonl_path, jsonl_offset, \
     status, last_activity_at, tokens_in, tokens_out, tokens_cache_read, \
     tokens_cache_write, auto_continue, resume_prompt, next_resume_at, \
-    resume_count, resume_cap, resumed_into, resume_failures";
+    resume_count, resume_cap, resumed_into, resume_failures, subtask_id";
 
 impl Registry {
     pub fn open(path: &Path) -> AppResult<Self> {
@@ -148,7 +150,8 @@ impl Registry {
                 resume_count INTEGER NOT NULL DEFAULT 0,
                 resume_cap INTEGER NOT NULL DEFAULT 3,
                 resumed_into TEXT,
-                resume_failures INTEGER NOT NULL DEFAULT 0
+                resume_failures INTEGER NOT NULL DEFAULT 0,
+                subtask_id TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_active
               ON sessions(ended_at) WHERE ended_at IS NULL;
@@ -166,6 +169,7 @@ impl Registry {
             "ALTER TABLE sessions ADD COLUMN resume_cap INTEGER NOT NULL DEFAULT 3",
             "ALTER TABLE sessions ADD COLUMN resumed_into TEXT",
             "ALTER TABLE sessions ADD COLUMN resume_failures INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN subtask_id TEXT",
         ];
         for sql in migrations {
             let _ = conn.execute(sql, []);
@@ -207,6 +211,7 @@ impl Registry {
             resume_cap,
             resumed_into: None,
             resume_failures: 0,
+            subtask_id: n.subtask_id,
         };
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -215,14 +220,14 @@ impl Registry {
                 (id, project_dir, model, claude_pid, terminal_pid, terminal_window_handle,
                  started_at, status, last_activity_at,
                  auto_continue, resume_prompt, resume_count, resume_cap,
-                 jsonl_path, jsonl_offset)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                 jsonl_path, jsonl_offset, subtask_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             "#,
             params![
                 s.id, s.project_dir, s.model, s.claude_pid, s.terminal_pid,
                 s.terminal_window_handle, s.started_at, s.status.as_str(), s.last_activity_at,
                 s.auto_continue as i64, s.resume_prompt, s.resume_count, s.resume_cap,
-                s.jsonl_path, s.jsonl_offset,
+                s.jsonl_path, s.jsonl_offset, s.subtask_id,
             ],
         )?;
         Ok(s)
@@ -597,6 +602,7 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         resume_cap: row.get(20)?,
         resumed_into: row.get(21)?,
         resume_failures: row.get(22)?,
+        subtask_id: row.get(23)?,
     })
 }
 
@@ -621,6 +627,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }
     }
 
@@ -777,6 +784,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         };
         let s = r.insert(bad).unwrap();
         assert_eq!(s.resume_cap, 3, "0 must trip the fallback, not persist as 0");
@@ -843,6 +851,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         let _disarmed = r.insert(new_sess("/b")).unwrap();
         r.set_pending_resume(&armed.id, 1000).unwrap();
@@ -860,6 +869,7 @@ mod tests {
             resume_count: 1,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_pending_resume(&capped.id, 1000).unwrap();
 
@@ -887,6 +897,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_pending_resume(&s.id, 1000).unwrap();
         r.record_resume_failure(&s.id, 5000).unwrap(); // bump failures, set retry
@@ -912,6 +923,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_pending_resume(&s.id, 1000).unwrap();
         r.record_resume_failure(&s.id, 5000).unwrap();
@@ -935,6 +947,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_pending_resume(&s.id, 1000).unwrap();
         r.mark_ended(&s.id, 9999).unwrap();
@@ -986,5 +999,63 @@ mod tests {
         assert_eq!(s.resume_cap, 3);
         assert_eq!(s.resume_count, 0);
         assert_eq!(s.next_resume_at, None);
+    }
+
+    #[test]
+    fn insert_and_get_round_trips_subtask_id() {
+        let r = make();
+        let mut new = new_sess("/p");
+        new.subtask_id = Some("st-123".into());
+        let s = r.insert(new).unwrap();
+        assert_eq!(s.subtask_id.as_deref(), Some("st-123"));
+        let fetched = r.get(&s.id).unwrap();
+        assert_eq!(fetched.subtask_id.as_deref(), Some("st-123"));
+    }
+
+    #[test]
+    fn open_legacy_db_adds_subtask_id_column() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        // Schema as of the auto-continue feature (no subtask_id column).
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                project_dir TEXT NOT NULL,
+                model TEXT NOT NULL,
+                claude_pid INTEGER NOT NULL,
+                terminal_pid INTEGER NOT NULL,
+                terminal_window_handle TEXT,
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                jsonl_path TEXT,
+                jsonl_offset INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                last_activity_at INTEGER NOT NULL,
+                tokens_in INTEGER NOT NULL DEFAULT 0,
+                tokens_out INTEGER NOT NULL DEFAULT 0,
+                tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+                tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+                auto_continue INTEGER NOT NULL DEFAULT 0,
+                resume_prompt TEXT,
+                next_resume_at INTEGER,
+                resume_count INTEGER NOT NULL DEFAULT 0,
+                resume_cap INTEGER NOT NULL DEFAULT 3,
+                resumed_into TEXT,
+                resume_failures INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO sessions
+                (id, project_dir, model, claude_pid, terminal_pid,
+                 started_at, status, last_activity_at)
+            VALUES ('legacy', '/p', 'm', 1, 2, 1000, 'running', 1000);
+            "#,
+        ).unwrap();
+        drop(conn);
+
+        let r = Registry::open(&path).unwrap();
+        let got = r.get("legacy").unwrap();
+        assert_eq!(got.subtask_id, None);
     }
 }
