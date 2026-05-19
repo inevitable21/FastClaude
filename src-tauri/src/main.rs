@@ -20,6 +20,7 @@ fn main() {
         .plugin(tauri_plugin_autostart::Builder::new()
             .args(["--launched-by-autostart"])
             .build())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir).ok();
