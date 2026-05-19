@@ -20,6 +20,8 @@ pub enum AppError {
     ClaudeNotOnPath,
     #[error("FastClaude doesn't yet support {0} — contributions welcome at https://github.com/inevitable21/FastClaude")]
     PlatformUnsupported(&'static str),
+    #[error("planner failed: {0}")]
+    PlannerFailed(String),
     #[error("{0}")]
     Other(String),
 }
