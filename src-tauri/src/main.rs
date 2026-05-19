@@ -179,6 +179,13 @@ fn main() {
             commands::clear_first_run,
             commands::check_for_update,
             commands::install_update,
+            commands::list_projects,
+            commands::list_hidden_projects,
+            commands::upsert_project,
+            commands::set_project_name,
+            commands::set_project_pinned,
+            commands::set_project_hidden,
+            commands::delete_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

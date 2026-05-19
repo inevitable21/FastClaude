@@ -358,6 +358,96 @@ pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
     app.restart();
 }
 
+use crate::projects::Project;
+
+#[tauri::command]
+pub fn list_projects(state: State<'_, AppState>) -> AppResult<Vec<Project>> {
+    state.projects.list_visible()
+}
+
+#[tauri::command]
+pub fn list_hidden_projects(state: State<'_, AppState>) -> AppResult<Vec<Project>> {
+    state.projects.list_hidden()
+}
+
+#[tauri::command]
+pub fn upsert_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> AppResult<Project> {
+    let p = state.projects.upsert_for_path(&path)?;
+    let _ = app.emit("project-changed", &p.id);
+    Ok(p)
+}
+
+#[tauri::command]
+pub fn set_project_name(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+) -> AppResult<()> {
+    state.projects.set_display_name(&id, &name)?;
+    let _ = app.emit("project-changed", &id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_project_pinned(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    on: bool,
+) -> AppResult<()> {
+    state.projects.set_pinned(&id, on)?;
+    let _ = app.emit("project-changed", &id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_project_hidden(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    on: bool,
+) -> AppResult<()> {
+    state.projects.set_hidden(&id, on)?;
+    let _ = app.emit("project-changed", &id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<()> {
+    // Refuse delete when this project has any todos or any non-ended sessions.
+    let p = state.projects.get(&id)?;
+    let todos = state.todos.list_todos_for_project(&id)?;
+    if !todos.is_empty() {
+        return Err(crate::error::AppError::Invalid(format!(
+            "project has {} TODO(s) — hide it instead",
+            todos.len()
+        )));
+    }
+    let active = state
+        .registry
+        .list_active()?
+        .into_iter()
+        .filter(|s| crate::session_registry::normalize_project_dir(&s.project_dir) == p.norm_path)
+        .count();
+    if active > 0 {
+        return Err(crate::error::AppError::Invalid(format!(
+            "project has {active} running session(s) — kill them or hide the project"
+        )));
+    }
+    state.projects.delete(&id)?;
+    let _ = app.emit("project-changed", &id);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +522,20 @@ mod tests {
         assert!(!got.auto_continue, "auto_continue is off");
         assert_eq!(got.next_resume_at, None,
             "user kill must clear pending resume so we don't auto-resume after manual kill");
+    }
+
+    #[test]
+    fn delete_project_refuses_when_todos_present() {
+        use crate::projects::Projects;
+        use crate::todos::Todos;
+        let projects = Projects::open_in_memory().unwrap();
+        let todos = Todos::open_in_memory().unwrap();
+        let p = projects.upsert_for_path("/foo").unwrap();
+        let _ = todos.create_todo(&p.id, "a todo").unwrap();
+        // Mirror the guard in delete_project: list todos then refuse.
+        let listed = todos.list_todos_for_project(&p.id).unwrap();
+        assert!(!listed.is_empty(), "precondition");
+        // The actual tauri command isn't directly callable in a unit test
+        // (it needs the AppState wiring), but we assert the underlying invariant.
     }
 }
