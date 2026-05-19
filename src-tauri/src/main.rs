@@ -211,6 +211,8 @@ fn main() {
             commands::plan_todo,
             commands::launch_subtask,
             commands::launch_all_subtasks,
+            commands::get_subtask,
+            commands::get_todo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

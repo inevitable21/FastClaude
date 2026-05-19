@@ -708,6 +708,16 @@ pub fn launch_all_subtasks(
     Ok(out)
 }
 
+#[tauri::command]
+pub fn get_subtask(state: State<'_, AppState>, id: String) -> AppResult<crate::todos::Subtask> {
+    state.todos.get_subtask(&id)
+}
+
+#[tauri::command]
+pub fn get_todo(state: State<'_, AppState>, id: String) -> AppResult<crate::todos::Todo> {
+    state.todos.get_todo(&id)
+}
+
 /// Recomputes a TODO's `state` and `auto_suggest_done_at` based on the
 /// current status of its child subtasks' sessions. Idempotent.
 pub fn recompute_todo_for_session(
