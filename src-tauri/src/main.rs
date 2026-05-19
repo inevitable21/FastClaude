@@ -186,6 +186,16 @@ fn main() {
             commands::set_project_pinned,
             commands::set_project_hidden,
             commands::delete_project,
+            commands::list_todos,
+            commands::list_subtasks,
+            commands::create_todo,
+            commands::delete_todo,
+            commands::mark_todo_finished,
+            commands::dismiss_auto_suggest,
+            commands::add_manual_subtask,
+            commands::edit_subtask,
+            commands::delete_subtask,
+            commands::reorder_subtasks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

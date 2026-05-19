@@ -448,6 +448,140 @@ pub fn delete_project(
     Ok(())
 }
 
+use crate::todos::{Subtask, Todo, TodoState};
+
+#[tauri::command]
+pub fn list_todos(state: State<'_, AppState>, project_id: String) -> AppResult<Vec<Todo>> {
+    state.todos.list_todos_for_project(&project_id)
+}
+
+#[tauri::command]
+pub fn list_subtasks(state: State<'_, AppState>, todo_id: String) -> AppResult<Vec<Subtask>> {
+    state.todos.list_subtasks(&todo_id)
+}
+
+#[tauri::command]
+pub fn create_todo(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+    title: String,
+) -> AppResult<Todo> {
+    let t = state.todos.create_todo(&project_id, &title)?;
+    let _ = app.emit("todo-changed", &t.id);
+    Ok(t)
+}
+
+#[tauri::command]
+pub fn delete_todo(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    kill_running_sessions: bool,
+) -> AppResult<()> {
+    let subtasks = state.todos.list_subtasks(&id)?;
+    if kill_running_sessions {
+        for s in &subtasks {
+            if let Some(sid) = &s.session_id {
+                // Look up the session; if still active, kill it. Ignore any
+                // not-found / already-dead errors so the delete proceeds.
+                if let Ok(sess) = state.registry.get(sid) {
+                    if sess.ended_at.is_none() {
+                        let _ = kill_session(app.clone(), state.clone(), sid.clone());
+                    }
+                }
+            }
+        }
+    } else {
+        // Refuse if any subtask references a still-running session.
+        for s in &subtasks {
+            if let Some(sid) = &s.session_id {
+                if let Ok(sess) = state.registry.get(sid) {
+                    if sess.ended_at.is_none() {
+                        return Err(crate::error::AppError::Invalid(
+                            "todo has running sessions — pass killRunningSessions=true to confirm".into(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    state.todos.delete_todo(&id)?;
+    let _ = app.emit("todo-changed", &id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn mark_todo_finished(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<()> {
+    state.todos.mark_finished(&id, chrono::Utc::now().timestamp())?;
+    let _ = app.emit("todo-changed", &id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn dismiss_auto_suggest(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<()> {
+    state.todos.set_auto_suggest_done_at(&id, None)?;
+    state.todos.set_state(&id, TodoState::Pending)?;
+    let _ = app.emit("todo-changed", &id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn add_manual_subtask(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    todo_id: String,
+    text: String,
+) -> AppResult<Subtask> {
+    let s = state.todos.add_manual_subtask(&todo_id, &text)?;
+    let _ = app.emit("todo-changed", &todo_id);
+    Ok(s)
+}
+
+#[tauri::command]
+pub fn edit_subtask(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    text: String,
+) -> AppResult<()> {
+    state.todos.edit_subtask(&id, &text)?;
+    // We don't know the parent todo without a lookup; emit a generic refresh.
+    let _ = app.emit("todo-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_subtask(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<()> {
+    state.todos.delete_subtask(&id)?;
+    let _ = app.emit("todo-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reorder_subtasks(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    todo_id: String,
+    ordered_ids: Vec<String>,
+) -> AppResult<()> {
+    state.todos.reorder_subtasks(&todo_id, &ordered_ids)?;
+    let _ = app.emit("todo-changed", &todo_id);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
