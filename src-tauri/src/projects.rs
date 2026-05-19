@@ -101,6 +101,77 @@ impl Projects {
             Err(AppError::NotFound(format!("project {id}")))
         }
     }
+
+    pub fn list_visible(&self) -> AppResult<Vec<Project>> {
+        // Tie-break on rowid DESC so creation order within the same Unix
+        // second is deterministic (newer inserts first).
+        self.list_where("hidden = 0 ORDER BY pinned DESC, created_at DESC, rowid DESC")
+    }
+
+    pub fn list_hidden(&self) -> AppResult<Vec<Project>> {
+        self.list_where("hidden = 1 ORDER BY created_at DESC, rowid DESC")
+    }
+
+    fn list_where(&self, where_clause: &str) -> AppResult<Vec<Project>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("SELECT {COLS} FROM projects WHERE {where_clause}");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], row_to_project)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn set_display_name(&self, id: &str, name: &str) -> AppResult<()> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Invalid("display name is empty".into()));
+        }
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE projects SET display_name = ?1 WHERE id = ?2",
+            params![trimmed, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("project {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn set_pinned(&self, id: &str, on: bool) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE projects SET pinned = ?1 WHERE id = ?2",
+            params![on as i64, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("project {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn set_hidden(&self, id: &str, on: bool) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE projects SET hidden = ?1 WHERE id = ?2",
+            params![on as i64, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("project {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn delete(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("project {id}")));
+        }
+        Ok(())
+    }
 }
 
 fn default_display_name(norm_path: &str) -> String {
@@ -157,5 +228,57 @@ mod tests {
     fn get_returns_not_found_for_unknown_id() {
         let p = make();
         assert!(matches!(p.get("nope"), Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn list_orders_pinned_first_then_created_desc() {
+        let p = make();
+        let a = p.upsert_for_path("/p/a").unwrap();
+        let b = p.upsert_for_path("/p/b").unwrap();
+        let c = p.upsert_for_path("/p/c").unwrap();
+        p.set_pinned(&b.id, true).unwrap();
+        let listed = p.list_visible().unwrap();
+        let ids: Vec<_> = listed.iter().map(|x| x.id.clone()).collect();
+        // b first (pinned), then c, a in reverse-created order
+        assert_eq!(ids, vec![b.id, c.id, a.id]);
+    }
+
+    #[test]
+    fn list_visible_excludes_hidden() {
+        let p = make();
+        let _a = p.upsert_for_path("/p/a").unwrap();
+        let b = p.upsert_for_path("/p/b").unwrap();
+        p.set_hidden(&b.id, true).unwrap();
+        let listed = p.list_visible().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].norm_path, "/p/a");
+    }
+
+    #[test]
+    fn list_hidden_returns_only_hidden() {
+        let p = make();
+        let _a = p.upsert_for_path("/p/a").unwrap();
+        let b = p.upsert_for_path("/p/b").unwrap();
+        p.set_hidden(&b.id, true).unwrap();
+        let listed = p.list_hidden().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, b.id);
+    }
+
+    #[test]
+    fn set_display_name_persists_and_rejects_empty() {
+        let p = make();
+        let a = p.upsert_for_path("/p/a").unwrap();
+        p.set_display_name(&a.id, "Alpha").unwrap();
+        assert_eq!(p.get(&a.id).unwrap().display_name, "Alpha");
+        assert!(matches!(p.set_display_name(&a.id, "  "), Err(AppError::Invalid(_))));
+    }
+
+    #[test]
+    fn delete_removes_row_and_returns_not_found_after() {
+        let p = make();
+        let a = p.upsert_for_path("/p/a").unwrap();
+        p.delete(&a.id).unwrap();
+        assert!(matches!(p.get(&a.id), Err(AppError::NotFound(_))));
     }
 }
