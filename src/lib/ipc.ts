@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Session, RecentProject, AppConfig, UpdateInfo, LaunchInput } from "@/types";
+import type {
+  Session,
+  RecentProject,
+  AppConfig,
+  UpdateInfo,
+  LaunchInput,
+  Project,
+  Todo,
+  Subtask,
+} from "@/types";
 
 export async function listSessions(): Promise<Session[]> {
   return invoke<Session[]>("list_sessions");
@@ -96,4 +105,78 @@ export async function onAutoContinueGaveUp(
   handler: (id: string) => void,
 ): Promise<UnlistenFn> {
   return listen<string>("auto-continue-gave-up", (e) => handler(e.payload));
+}
+
+// Projects
+export async function listProjects(): Promise<Project[]> {
+  return invoke<Project[]>("list_projects");
+}
+export async function listHiddenProjects(): Promise<Project[]> {
+  return invoke<Project[]>("list_hidden_projects");
+}
+export async function upsertProject(path: string): Promise<Project> {
+  return invoke<Project>("upsert_project", { path });
+}
+export async function setProjectName(id: string, name: string): Promise<void> {
+  return invoke<void>("set_project_name", { id, name });
+}
+export async function setProjectPinned(id: string, on: boolean): Promise<void> {
+  return invoke<void>("set_project_pinned", { id, on });
+}
+export async function setProjectHidden(id: string, on: boolean): Promise<void> {
+  return invoke<void>("set_project_hidden", { id, on });
+}
+export async function deleteProject(id: string): Promise<void> {
+  return invoke<void>("delete_project", { id });
+}
+
+// Todos
+export async function listTodos(projectId: string): Promise<Todo[]> {
+  return invoke<Todo[]>("list_todos", { projectId });
+}
+export async function createTodo(projectId: string, title: string): Promise<Todo> {
+  return invoke<Todo>("create_todo", { projectId, title });
+}
+export async function planTodo(todoId: string): Promise<void> {
+  return invoke<void>("plan_todo", { todoId });
+}
+export async function deleteTodo(id: string, killRunningSessions: boolean): Promise<void> {
+  return invoke<void>("delete_todo", { id, killRunningSessions });
+}
+export async function markTodoFinished(id: string): Promise<void> {
+  return invoke<void>("mark_todo_finished", { id });
+}
+export async function dismissAutoSuggest(id: string): Promise<void> {
+  return invoke<void>("dismiss_auto_suggest", { id });
+}
+
+// Subtasks
+export async function listSubtasks(todoId: string): Promise<Subtask[]> {
+  return invoke<Subtask[]>("list_subtasks", { todoId });
+}
+export async function addManualSubtask(todoId: string, text: string): Promise<Subtask> {
+  return invoke<Subtask>("add_manual_subtask", { todoId, text });
+}
+export async function editSubtask(id: string, text: string): Promise<void> {
+  return invoke<void>("edit_subtask", { id, text });
+}
+export async function deleteSubtask(id: string): Promise<void> {
+  return invoke<void>("delete_subtask", { id });
+}
+export async function reorderSubtasks(todoId: string, orderedIds: string[]): Promise<void> {
+  return invoke<void>("reorder_subtasks", { todoId, orderedIds });
+}
+export async function launchSubtask(subtaskId: string): Promise<Session> {
+  return invoke<Session>("launch_subtask", { subtaskId });
+}
+export async function launchAllSubtasks(todoId: string): Promise<Session[]> {
+  return invoke<Session[]>("launch_all_subtasks", { todoId });
+}
+
+// Events
+export async function onProjectChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen("project-changed", () => handler());
+}
+export async function onTodoChanged(handler: () => void): Promise<UnlistenFn> {
+  return listen("todo-changed", () => handler());
 }
