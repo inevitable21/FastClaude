@@ -8,5 +8,6 @@ pub mod projects;
 pub mod recent_projects;
 pub mod session_registry;
 pub mod spawner;
+pub mod todos;
 pub mod usage_reader;
 pub mod window_focus;
