@@ -448,6 +448,18 @@ impl Todos {
         }
         Ok(())
     }
+
+    pub fn get_subtask(&self, id: &str) -> AppResult<Subtask> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("SELECT {SUBTASK_COLS} FROM subtasks WHERE id = ?1");
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(params![id])?;
+        if let Some(r) = rows.next()? {
+            Ok(row_to_subtask(r)?)
+        } else {
+            Err(AppError::NotFound(format!("subtask {id}")))
+        }
+    }
 }
 
 fn row_to_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Todo> {
@@ -670,5 +682,14 @@ mod tests {
         let todo = t.create_todo("p", "do").unwrap();
         t.set_state(&todo.id, TodoState::Ongoing).unwrap();
         assert_eq!(t.get_todo(&todo.id).unwrap().state, TodoState::Ongoing);
+    }
+
+    #[test]
+    fn get_subtask_round_trips() {
+        let t = make();
+        let todo = t.create_todo("p", "do").unwrap();
+        let subs = t.replace_subtasks(&todo.id, &["a".into()]).unwrap();
+        let again = t.get_subtask(&subs[0].id).unwrap();
+        assert_eq!(again, subs[0]);
     }
 }

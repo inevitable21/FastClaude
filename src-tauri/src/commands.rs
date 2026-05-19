@@ -53,6 +53,10 @@ pub struct LaunchInput {
     /// time means "fall back to config.default_resume_prompt at fire time".
     #[serde(default)]
     pub resume_prompt: Option<String>,
+    /// Set when this launch was triggered by a subtask launch action;
+    /// stored on the session row so the dashboard can render the parent badge.
+    #[serde(default)]
+    pub subtask_id: Option<String>,
 }
 
 #[tauri::command]
@@ -89,7 +93,7 @@ pub fn launch_session(
     };
     let result = state.spawner.spawn(&req)?;
     let session = state.registry.insert(NewSession {
-        project_dir: input.project_dir,
+        project_dir: input.project_dir.clone(),
         model,
         claude_pid: result.claude_pid,
         terminal_pid: result.terminal_pid,
@@ -100,8 +104,11 @@ pub fn launch_session(
         resume_count: 0,
         jsonl_path: None,
         jsonl_offset: 0,
-        subtask_id: None,
+        subtask_id: input.subtask_id.clone(),
     })?;
+    // Auto-create / refresh the project entry so the sidebar reflects this
+    // folder. Errors are non-fatal — the session is already live.
+    let _ = state.projects.upsert_for_path(&input.project_dir);
     let _ = app.emit("session-changed", &session);
     Ok(session)
 }
@@ -648,6 +655,57 @@ pub async fn plan_todo(
             Err(e)
         }
     }
+}
+
+#[tauri::command]
+pub fn launch_subtask(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    subtask_id: String,
+) -> AppResult<Session> {
+    // `get_subtask` is added in Step 3 of this same task.
+    let subtask = state.todos.get_subtask(&subtask_id)?;
+    let todo = state.todos.get_todo(&subtask.todo_id)?;
+    let project = state.projects.get(&todo.project_id)?;
+    let cfg = state.config.lock().unwrap().clone();
+
+    let input = LaunchInput {
+        project_dir: project.norm_path.clone(),
+        model: Some(cfg.default_model.clone()),
+        prompt: Some(subtask.text.clone()),
+        resume: None,
+        effort: None,
+        permission_mode: None,
+        extra_args: None,
+        auto_continue: None,
+        resume_prompt: None,
+        subtask_id: Some(subtask_id.clone()),
+    };
+    let session = launch_session(app.clone(), state.clone(), input)?;
+    state.todos.attach_session(&subtask_id, &session.id)?;
+    state
+        .todos
+        .set_state(&todo.id, crate::todos::TodoState::Ongoing)?;
+    let _ = app.emit("todo-changed", &todo.id);
+    Ok(session)
+}
+
+#[tauri::command]
+pub fn launch_all_subtasks(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    todo_id: String,
+) -> AppResult<Vec<Session>> {
+    let subtasks = state.todos.list_subtasks(&todo_id)?;
+    let mut out = Vec::new();
+    for s in subtasks {
+        if s.session_id.is_some() {
+            continue; // already launched
+        }
+        let sess = launch_subtask(app.clone(), state.clone(), s.id.clone())?;
+        out.push(sess);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
