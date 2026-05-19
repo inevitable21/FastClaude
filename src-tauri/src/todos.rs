@@ -383,6 +383,71 @@ impl Todos {
         }
         Ok(())
     }
+
+    pub fn set_planner_status(&self, id: &str, status: PlannerStatus) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let sql = if matches!(status, PlannerStatus::PlannerFailed) {
+            "UPDATE todos SET planner_status = ?1 WHERE id = ?2"
+        } else {
+            // Clearing the error when moving back to a non-failed state keeps
+            // the UI honest — no stale message dangling under a "Planned" todo.
+            "UPDATE todos SET planner_status = ?1, planner_error = NULL WHERE id = ?2"
+        };
+        let n = conn.execute(sql, params![status.as_str(), id])?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("todo {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn set_planner_error(&self, id: &str, err: Option<&str>) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE todos SET planner_error = ?1 WHERE id = ?2",
+            params![err, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("todo {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn set_state(&self, id: &str, state: TodoState) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE todos SET state = ?1 WHERE id = ?2",
+            params![state.as_str(), id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("todo {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn set_auto_suggest_done_at(&self, id: &str, when: Option<i64>) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE todos SET auto_suggest_done_at = ?1 WHERE id = ?2",
+            params![when, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("todo {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn mark_finished(&self, id: &str, when: i64) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE todos SET state = 'finished', completed_at = ?1, auto_suggest_done_at = NULL
+             WHERE id = ?2",
+            params![when, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("todo {id}")));
+        }
+        Ok(())
+    }
 }
 
 fn row_to_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Todo> {
@@ -554,5 +619,56 @@ mod tests {
         assert!(matches!(t.get_todo(&todo.id), Err(AppError::NotFound(_))));
         let subs = t.list_subtasks(&todo.id).unwrap();
         assert!(subs.is_empty());
+    }
+
+    #[test]
+    fn set_planner_status_persists() {
+        let t = make();
+        let todo = t.create_todo("p", "do").unwrap();
+        t.set_planner_status(&todo.id, PlannerStatus::Planning).unwrap();
+        assert_eq!(
+            t.get_todo(&todo.id).unwrap().planner_status,
+            PlannerStatus::Planning
+        );
+    }
+
+    #[test]
+    fn set_planner_error_clears_when_set_planner_status_not_failed() {
+        let t = make();
+        let todo = t.create_todo("p", "do").unwrap();
+        t.set_planner_status(&todo.id, PlannerStatus::PlannerFailed).unwrap();
+        t.set_planner_error(&todo.id, Some("oops")).unwrap();
+        assert_eq!(t.get_todo(&todo.id).unwrap().planner_error.as_deref(), Some("oops"));
+        t.set_planner_status(&todo.id, PlannerStatus::Planned).unwrap();
+        assert_eq!(t.get_todo(&todo.id).unwrap().planner_error, None);
+    }
+
+    #[test]
+    fn mark_finished_sets_completed_at_and_state() {
+        let t = make();
+        let todo = t.create_todo("p", "do").unwrap();
+        t.mark_finished(&todo.id, 12345).unwrap();
+        let got = t.get_todo(&todo.id).unwrap();
+        assert_eq!(got.state, TodoState::Finished);
+        assert_eq!(got.completed_at, Some(12345));
+        assert_eq!(got.auto_suggest_done_at, None);
+    }
+
+    #[test]
+    fn set_auto_suggest_done_at_round_trips_and_can_clear() {
+        let t = make();
+        let todo = t.create_todo("p", "do").unwrap();
+        t.set_auto_suggest_done_at(&todo.id, Some(7777)).unwrap();
+        assert_eq!(t.get_todo(&todo.id).unwrap().auto_suggest_done_at, Some(7777));
+        t.set_auto_suggest_done_at(&todo.id, None).unwrap();
+        assert_eq!(t.get_todo(&todo.id).unwrap().auto_suggest_done_at, None);
+    }
+
+    #[test]
+    fn set_state_persists() {
+        let t = make();
+        let todo = t.create_todo("p", "do").unwrap();
+        t.set_state(&todo.id, TodoState::Ongoing).unwrap();
+        assert_eq!(t.get_todo(&todo.id).unwrap().state, TodoState::Ongoing);
     }
 }
