@@ -24,6 +24,7 @@ export interface Session {
   resume_cap: number;
   resumed_into: string | null;
   resume_failures: number;
+  subtask_id: string | null;
 }
 
 export interface RecentProject {
@@ -61,9 +62,46 @@ export interface LaunchInput {
   extra_args?: string;
   auto_continue?: boolean;
   resume_prompt?: string;
+  subtask_id?: string;
 }
 
 export interface UpdateInfo {
   version: string;
   notes: string | null;
+}
+
+export interface Project {
+  id: string;
+  norm_path: string;
+  display_name: string;
+  pinned: boolean;
+  hidden: boolean;
+  created_at: number;
+}
+
+export type TodoState = "pending" | "ongoing" | "finished";
+export type PlannerStatus = "idle" | "planning" | "planned" | "planner_failed";
+
+export interface Todo {
+  id: string;
+  project_id: string;
+  title: string;
+  state: TodoState;
+  planner_status: PlannerStatus;
+  planner_error: string | null;
+  auto_suggest_done_at: number | null;
+  created_at: number;
+  completed_at: number | null;
+}
+
+export type SubtaskOrigin = "planner" | "manual";
+
+export interface Subtask {
+  id: string;
+  todo_id: string;
+  ord: number;
+  text: string;
+  session_id: string | null;
+  origin: SubtaskOrigin;
+  created_at: number;
 }
