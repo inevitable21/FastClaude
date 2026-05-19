@@ -1,8 +1,11 @@
 use crate::config::{self, Config};
 use crate::error::AppResult;
+use crate::planner::PlannerRunner;
+use crate::projects::Projects;
 use crate::recent_projects::{self, RecentProject};
 use crate::session_registry::{NewSession, Registry, Session};
 use crate::spawner::{SpawnRequest, Spawner};
+use crate::todos::Todos;
 use crate::window_focus::WindowFocus;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,11 +15,17 @@ use tauri::{Emitter, State};
 
 pub struct AppState {
     pub registry: Arc<Registry>,
+    pub projects: Arc<Projects>,
+    pub todos: Arc<Todos>,
+    pub planner_runner: Arc<dyn PlannerRunner>,
     pub spawner: Arc<dyn Spawner>,
     pub focus: Box<dyn WindowFocus>,
     pub config: Arc<Mutex<Config>>,
     pub config_path: PathBuf,
     pub is_first_run: AtomicBool,
+    /// Guards the planner concurrency: a todo id is inserted while planning
+    /// is in flight and removed when planning finishes (success or failure).
+    pub planning_in_flight: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 #[derive(serde::Deserialize)]

@@ -31,16 +31,32 @@ fn main() {
             let db_path = data_dir.join("state.db");
             let registry = Arc::new(Registry::open(&db_path).expect("open registry"));
 
+            let projects_path = data_dir.join("projects.db");
+            let projects_reg = Arc::new(
+                fastclaude_lib::projects::Projects::open(&projects_path)
+                    .expect("open projects"),
+            );
+            let todos_path = data_dir.join("todos.db");
+            let todos_reg = Arc::new(
+                fastclaude_lib::todos::Todos::open(&todos_path).expect("open todos"),
+            );
+            let planner_runner: Arc<dyn fastclaude_lib::planner::PlannerRunner> =
+                Arc::new(fastclaude_lib::planner::RealRunner);
+
             reconcile_startup(&registry);
 
             let spawner_arc: Arc<dyn fastclaude_lib::spawner::Spawner> = spawner::default_spawner();
             let state = AppState {
                 registry: registry.clone(),
+                projects: projects_reg.clone(),
+                todos: todos_reg.clone(),
+                planner_runner: planner_runner.clone(),
                 spawner: spawner_arc.clone(),
                 focus: window_focus::default_focus(),
                 config: cfg_arc.clone(),
                 config_path: cfg_path.clone(),
                 is_first_run: AtomicBool::new(was_created),
+                planning_in_flight: Arc::new(Mutex::new(Default::default())),
             };
             app.manage(state);
 
