@@ -582,6 +582,74 @@ pub fn reorder_subtasks(
     Ok(())
 }
 
+use crate::planner;
+use crate::todos::PlannerStatus;
+
+#[tauri::command]
+pub async fn plan_todo(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    todo_id: String,
+) -> AppResult<()> {
+    // Concurrency guard: refuse if already planning.
+    {
+        let mut in_flight = state.planning_in_flight.lock().unwrap();
+        if in_flight.contains(&todo_id) {
+            return Err(crate::error::AppError::Invalid("already planning this todo".into()));
+        }
+        in_flight.insert(todo_id.clone());
+    }
+
+    // Reset error, mark planning.
+    let todo = state.todos.get_todo(&todo_id)?;
+    let project = state.projects.get(&todo.project_id)?;
+    state.todos.set_planner_status(&todo_id, PlannerStatus::Planning)?;
+    state.todos.set_planner_error(&todo_id, None)?;
+    let _ = app.emit("todo-changed", &todo_id);
+
+    // Pull the model from config and clone the runner Arc so the blocking
+    // closure does not borrow `state`.
+    let model = state.config.lock().unwrap().default_model.clone();
+    let runner = state.planner_runner.clone();
+    let title = todo.title.clone();
+    let project_name = project.display_name.clone();
+
+    // The planner spawns a subprocess — keep it on the blocking pool so the
+    // tauri async runtime stays responsive.
+    let result = tokio::task::spawn_blocking(move || {
+        planner::plan_subtasks(
+            runner.as_ref(),
+            &title,
+            &project_name,
+            &model,
+            planner::DEFAULT_TIMEOUT,
+        )
+    })
+    .await
+    .map_err(|e| crate::error::AppError::Other(format!("planner task join: {e}")))?;
+
+    // Clear in-flight regardless of outcome.
+    state.planning_in_flight.lock().unwrap().remove(&todo_id);
+
+    match result {
+        Ok(texts) => {
+            state.todos.replace_subtasks(&todo_id, &texts)?;
+            state.todos.set_planner_status(&todo_id, PlannerStatus::Planned)?;
+            let _ = app.emit("todo-changed", &todo_id);
+            Ok(())
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            state
+                .todos
+                .set_planner_status(&todo_id, PlannerStatus::PlannerFailed)?;
+            state.todos.set_planner_error(&todo_id, Some(&msg))?;
+            let _ = app.emit("todo-changed", &todo_id);
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
