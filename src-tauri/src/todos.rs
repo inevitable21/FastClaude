@@ -223,6 +223,166 @@ impl Todos {
         }
         Ok(out)
     }
+
+    pub fn list_subtasks(&self, todo_id: &str) -> AppResult<Vec<Subtask>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {SUBTASK_COLS} FROM subtasks WHERE todo_id = ?1 ORDER BY ord ASC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![todo_id], row_to_subtask)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn replace_subtasks(
+        &self,
+        todo_id: &str,
+        texts: &[String],
+    ) -> AppResult<Vec<Subtask>> {
+        let conn = self.conn.lock().unwrap();
+        let launched: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM subtasks WHERE todo_id = ?1 AND session_id IS NOT NULL",
+            params![todo_id],
+            |r| r.get(0),
+        )?;
+        if launched > 0 {
+            return Err(AppError::Invalid(
+                "cannot replace subtasks after sessions launched".into(),
+            ));
+        }
+        conn.execute("DELETE FROM subtasks WHERE todo_id = ?1", params![todo_id])?;
+        let now = chrono::Utc::now().timestamp();
+        let mut out = Vec::with_capacity(texts.len());
+        for (i, text) in texts.iter().enumerate() {
+            let s = Subtask {
+                id: Uuid::new_v4().to_string(),
+                todo_id: todo_id.into(),
+                ord: i as i64,
+                text: text.clone(),
+                session_id: None,
+                origin: SubtaskOrigin::Planner,
+                created_at: now,
+            };
+            conn.execute(
+                "INSERT INTO subtasks (id, todo_id, ord, text, session_id, origin, created_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+                params![s.id, s.todo_id, s.ord, s.text, s.origin.as_str(), s.created_at],
+            )?;
+            out.push(s);
+        }
+        Ok(out)
+    }
+
+    pub fn add_manual_subtask(&self, todo_id: &str, text: &str) -> AppResult<Subtask> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Invalid("subtask text is empty".into()));
+        }
+        let conn = self.conn.lock().unwrap();
+        let next_ord: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(ord) + 1, 0) FROM subtasks WHERE todo_id = ?1",
+                params![todo_id],
+                |r| r.get(0),
+            )?;
+        let s = Subtask {
+            id: Uuid::new_v4().to_string(),
+            todo_id: todo_id.into(),
+            ord: next_ord,
+            text: trimmed.into(),
+            session_id: None,
+            origin: SubtaskOrigin::Manual,
+            created_at: chrono::Utc::now().timestamp(),
+        };
+        conn.execute(
+            "INSERT INTO subtasks (id, todo_id, ord, text, session_id, origin, created_at)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+            params![s.id, s.todo_id, s.ord, s.text, s.origin.as_str(), s.created_at],
+        )?;
+        Ok(s)
+    }
+
+    pub fn edit_subtask(&self, id: &str, text: &str) -> AppResult<()> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Invalid("subtask text is empty".into()));
+        }
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE subtasks SET text = ?1 WHERE id = ?2",
+            params![trimmed, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("subtask {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn delete_subtask(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute("DELETE FROM subtasks WHERE id = ?1", params![id])?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("subtask {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn reorder_subtasks(&self, todo_id: &str, ordered_ids: &[String]) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let mut existing: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT id FROM subtasks WHERE todo_id = ?1")?;
+            let rows = stmt.query_map(params![todo_id], |r| r.get::<_, String>(0))?;
+            let mut v = Vec::new();
+            for r in rows { v.push(r?); }
+            v
+        };
+        existing.sort();
+        let mut requested = ordered_ids.to_vec();
+        requested.sort();
+        if existing != requested {
+            return Err(AppError::Invalid(
+                "reorder ids do not match the subtask set for this todo".into(),
+            ));
+        }
+        let tx = conn.unchecked_transaction()?;
+        for (i, id) in ordered_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE subtasks SET ord = ?1 WHERE id = ?2",
+                params![i as i64, id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn attach_session(&self, subtask_id: &str, session_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE subtasks SET session_id = ?1 WHERE id = ?2",
+            params![session_id, subtask_id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("subtask {subtask_id}")));
+        }
+        Ok(())
+    }
+
+    pub fn delete_todo(&self, id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        // Manual cascade — SQLite's PRAGMA foreign_keys is per-connection and
+        // PRAGMA was already enabled in init_schema, but spell it out anyway
+        // for clarity and so the test passes on any connection state.
+        conn.execute("DELETE FROM subtasks WHERE todo_id = ?1", params![id])?;
+        let n = conn.execute("DELETE FROM todos WHERE id = ?1", params![id])?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("todo {id}")));
+        }
+        Ok(())
+    }
 }
 
 fn row_to_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Todo> {
@@ -288,5 +448,111 @@ mod tests {
         let listed = t.list_todos_for_project("p1").unwrap();
         let ids: Vec<_> = listed.iter().map(|x| x.id.clone()).collect();
         assert_eq!(ids, vec![c.id, a.id]);
+    }
+
+    #[test]
+    fn replace_subtasks_writes_planner_origin_with_sequential_ord() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        let written = t
+            .replace_subtasks(&todo.id, &["one".into(), "two".into(), "three".into()])
+            .unwrap();
+        assert_eq!(written.len(), 3);
+        for (i, s) in written.iter().enumerate() {
+            assert_eq!(s.ord, i as i64);
+            assert_eq!(s.origin, SubtaskOrigin::Planner);
+            assert_eq!(s.todo_id, todo.id);
+            assert!(s.session_id.is_none());
+        }
+    }
+
+    #[test]
+    fn replace_subtasks_overwrites_existing_when_none_launched() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        t.replace_subtasks(&todo.id, &["a".into(), "b".into()]).unwrap();
+        t.replace_subtasks(&todo.id, &["x".into()]).unwrap();
+        let subs = t.list_subtasks(&todo.id).unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].text, "x");
+    }
+
+    #[test]
+    fn replace_subtasks_refuses_when_any_already_launched() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        let subs = t.replace_subtasks(&todo.id, &["a".into(), "b".into()]).unwrap();
+        t.attach_session(&subs[0].id, "sess-1").unwrap();
+        let err = t.replace_subtasks(&todo.id, &["x".into()]);
+        assert!(matches!(err, Err(AppError::Invalid(_))));
+    }
+
+    #[test]
+    fn add_manual_subtask_appends_after_existing_max_ord() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        t.replace_subtasks(&todo.id, &["a".into(), "b".into()]).unwrap();
+        let manual = t.add_manual_subtask(&todo.id, "c").unwrap();
+        assert_eq!(manual.ord, 2);
+        assert_eq!(manual.origin, SubtaskOrigin::Manual);
+    }
+
+    #[test]
+    fn edit_subtask_persists_text_change() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        let subs = t.replace_subtasks(&todo.id, &["a".into()]).unwrap();
+        t.edit_subtask(&subs[0].id, "updated").unwrap();
+        let again = t.list_subtasks(&todo.id).unwrap();
+        assert_eq!(again[0].text, "updated");
+    }
+
+    #[test]
+    fn delete_subtask_removes_row() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        let subs = t.replace_subtasks(&todo.id, &["a".into(), "b".into()]).unwrap();
+        t.delete_subtask(&subs[0].id).unwrap();
+        let remaining = t.list_subtasks(&todo.id).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].text, "b");
+    }
+
+    #[test]
+    fn reorder_subtasks_renumbers_ord() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        let subs = t.replace_subtasks(&todo.id, &["a".into(), "b".into(), "c".into()]).unwrap();
+        let new_order = vec![subs[2].id.clone(), subs[0].id.clone(), subs[1].id.clone()];
+        t.reorder_subtasks(&todo.id, &new_order).unwrap();
+        let listed = t.list_subtasks(&todo.id).unwrap();
+        let texts: Vec<_> = listed.iter().map(|s| s.text.clone()).collect();
+        assert_eq!(texts, vec!["c", "a", "b"]);
+        for (i, s) in listed.iter().enumerate() {
+            assert_eq!(s.ord, i as i64);
+        }
+    }
+
+    #[test]
+    fn reorder_subtasks_refuses_when_set_does_not_match() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        let subs = t.replace_subtasks(&todo.id, &["a".into(), "b".into()]).unwrap();
+        let bad = vec![subs[0].id.clone()];
+        assert!(matches!(
+            t.reorder_subtasks(&todo.id, &bad),
+            Err(AppError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn delete_todo_cascade_removes_subtasks() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        t.replace_subtasks(&todo.id, &["a".into(), "b".into()]).unwrap();
+        t.delete_todo(&todo.id).unwrap();
+        assert!(matches!(t.get_todo(&todo.id), Err(AppError::NotFound(_))));
+        let subs = t.list_subtasks(&todo.id).unwrap();
+        assert!(subs.is_empty());
     }
 }
