@@ -1,5 +1,6 @@
 # Project
 .superpowers/
+.claude/
 target/
 node_modules/
 dist/
