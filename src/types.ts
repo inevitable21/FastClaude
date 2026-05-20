@@ -104,4 +104,8 @@ export interface Subtask {
   session_id: string | null;
   origin: SubtaskOrigin;
   created_at: number;
+  // Derived: true when session_id is set AND that session has `ended_at` set.
+  // Returned by `list_subtasks` and absent on `get_subtask` (treat absent/false
+  // identically — a missing field means "we don't know, so assume not ended").
+  session_ended?: boolean;
 }

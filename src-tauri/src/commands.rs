@@ -462,9 +462,39 @@ pub fn list_todos(state: State<'_, AppState>, project_id: String) -> AppResult<V
     state.todos.list_todos_for_project(&project_id)
 }
 
+/// What the frontend gets per subtask: the stored row plus a derived
+/// `session_ended` flag so the review dialog knows when a previously-launched
+/// subtask is eligible to launch again (its session died, was killed, or was
+/// closed by the user). `false` means either no session ever attached, or the
+/// session is still alive.
+#[derive(serde::Serialize)]
+pub struct SubtaskView {
+    #[serde(flatten)]
+    pub subtask: Subtask,
+    pub session_ended: bool,
+}
+
+fn session_ended_for(registry: &Registry, session_id: &Option<String>) -> bool {
+    match session_id {
+        Some(sid) => registry
+            .get(sid)
+            .map(|sess| sess.ended_at.is_some())
+            // If the row was deleted out from under us, treat as ended so the
+            // subtask becomes re-launchable rather than wedged.
+            .unwrap_or(true),
+        None => false,
+    }
+}
+
 #[tauri::command]
-pub fn list_subtasks(state: State<'_, AppState>, todo_id: String) -> AppResult<Vec<Subtask>> {
-    state.todos.list_subtasks(&todo_id)
+pub fn list_subtasks(state: State<'_, AppState>, todo_id: String) -> AppResult<Vec<SubtaskView>> {
+    let subs = state.todos.list_subtasks(&todo_id)?;
+    let mut out = Vec::with_capacity(subs.len());
+    for s in subs {
+        let ended = session_ended_for(&state.registry, &s.session_id);
+        out.push(SubtaskView { subtask: s, session_ended: ended });
+    }
+    Ok(out)
 }
 
 #[tauri::command]
@@ -640,6 +670,31 @@ pub async fn plan_todo(
 
     match result {
         Ok(texts) => {
+            // Re-plan path: if any existing subtask's previous session has
+            // ended, clear those pointers so `replace_subtasks`' guard ("any
+            // session_id is non-NULL") allows the overwrite. If any subtask is
+            // attached to a LIVE session we refuse the re-plan here rather
+            // than orphaning the running session.
+            let existing = state.todos.list_subtasks(&todo_id)?;
+            let any_live = existing
+                .iter()
+                .any(|s| s.session_id.is_some() && !session_ended_for(&state.registry, &s.session_id));
+            if any_live {
+                state
+                    .todos
+                    .set_planner_status(&todo_id, PlannerStatus::PlannerFailed)?;
+                state.todos.set_planner_error(
+                    &todo_id,
+                    Some("cannot re-plan while a subtask session is still running"),
+                )?;
+                let _ = app.emit("todo-changed", &todo_id);
+                return Err(crate::error::AppError::Invalid(
+                    "cannot re-plan while a subtask session is still running".into(),
+                ));
+            }
+            if existing.iter().any(|s| s.session_id.is_some()) {
+                state.todos.detach_all_sessions(&todo_id)?;
+            }
             state.todos.replace_subtasks(&todo_id, &texts)?;
             state.todos.set_planner_status(&todo_id, PlannerStatus::Planned)?;
             let _ = app.emit("todo-changed", &todo_id);
@@ -699,8 +754,12 @@ pub fn launch_all_subtasks(
     let subtasks = state.todos.list_subtasks(&todo_id)?;
     let mut out = Vec::new();
     for s in subtasks {
-        if s.session_id.is_some() {
-            continue; // already launched
+        // Skip only if the subtask has a *live* session attached. A subtask
+        // whose previous session ended (crashed, was killed, or user closed
+        // the terminal) is eligible to relaunch — attach_session will
+        // overwrite the dead session_id with the new one.
+        if s.session_id.is_some() && !session_ended_for(&state.registry, &s.session_id) {
+            continue;
         }
         let sess = launch_subtask(app.clone(), state.clone(), s.id.clone())?;
         out.push(sess);

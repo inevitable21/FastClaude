@@ -57,7 +57,11 @@ export function SubtaskReviewDialog({ todoId, open, onOpenChange }: Props) {
   }, [open, refresh]);
 
   if (!todoId) return null;
-  const anyLaunched = subtasks.some((s) => s.session_id);
+  // A subtask is "live" only while its attached session is still running.
+  // A subtask whose session ended (crashed, killed, closed) is eligible to
+  // relaunch and is treated like a fresh subtask for editing/reordering/delete.
+  const isLive = (s: typeof subtasks[number]) => !!s.session_id && !s.session_ended;
+  const anyLive = subtasks.some(isLive);
 
   async function saveDraft(id: string) {
     const text = drafts[id];
@@ -79,8 +83,8 @@ export function SubtaskReviewDialog({ todoId, open, onOpenChange }: Props) {
   }
 
   async function rePlan() {
-    if (anyLaunched) {
-      toast({ title: "Cannot re-plan", description: "Some subtasks already launched", variant: "destructive" });
+    if (anyLive) {
+      toast({ title: "Cannot re-plan", description: "Stop any running subtask sessions first", variant: "destructive" });
       return;
     }
     await planTodo(todoId!);
@@ -107,29 +111,39 @@ export function SubtaskReviewDialog({ todoId, open, onOpenChange }: Props) {
           <DialogTitle>Review subtasks</DialogTitle>
         </DialogHeader>
         <div className="space-y-2">
-          {subtasks.map((s) => (
+          {subtasks.map((s) => {
+            const live = isLive(s);
+            const wasLaunched = !!s.session_id && !live;
+            return (
             <div
               key={s.id}
-              className={`flex items-start gap-2 p-2 rounded border ${s.session_id ? "bg-foreground/5" : "border-border"}`}
-              draggable={!s.session_id}
+              className={`flex items-start gap-2 p-2 rounded border ${live ? "bg-foreground/5" : "border-border"}`}
+              draggable={!live}
               onDragStart={() => onDragStart(s.id)}
               onDragOver={onDragOver}
               onDrop={() => onDrop(s.id)}
             >
-              <GripVertical className={`h-4 w-4 mt-1 ${s.session_id ? "opacity-30" : "opacity-70 cursor-grab"}`} />
-              <Textarea
-                value={drafts[s.id] ?? s.text}
-                onChange={(e) => setDrafts((d) => ({ ...d, [s.id]: e.target.value }))}
-                onBlur={() => saveDraft(s.id)}
-                disabled={!!s.session_id}
-                className="font-sans flex-1"
-                rows={2}
-              />
+              <GripVertical className={`h-4 w-4 mt-1 ${live ? "opacity-30" : "opacity-70 cursor-grab"}`} />
+              <div className="flex-1 space-y-1">
+                <Textarea
+                  value={drafts[s.id] ?? s.text}
+                  onChange={(e) => setDrafts((d) => ({ ...d, [s.id]: e.target.value }))}
+                  onBlur={() => saveDraft(s.id)}
+                  disabled={live}
+                  className="font-sans w-full"
+                  rows={2}
+                />
+                {wasLaunched && (
+                  <div className="text-[10px] text-muted-foreground">
+                    Previous session ended — click <Rocket className="inline h-2.5 w-2.5" /> to relaunch
+                  </div>
+                )}
+              </div>
               <div className="flex flex-col gap-1">
                 <button
-                  title="Launch this subtask"
+                  title={wasLaunched ? "Relaunch this subtask" : "Launch this subtask"}
                   onClick={() => launchOne(s.id)}
-                  disabled={!!s.session_id}
+                  disabled={live}
                   className="text-xs disabled:opacity-30"
                 >
                   <Rocket className="h-4 w-4" />
@@ -137,14 +151,15 @@ export function SubtaskReviewDialog({ todoId, open, onOpenChange }: Props) {
                 <button
                   title="Delete"
                   onClick={() => deleteSubtask(s.id)}
-                  disabled={!!s.session_id}
+                  disabled={live}
                   className="text-xs disabled:opacity-30"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
           <button
             className="text-xs px-2 py-1 border border-dashed border-border rounded w-full hover:bg-foreground/5"
             onClick={async () => {
@@ -155,7 +170,7 @@ export function SubtaskReviewDialog({ todoId, open, onOpenChange }: Props) {
             <Plus className="inline h-3 w-3 mr-1" /> Add manual subtask
           </button>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" onClick={rePlan} disabled={anyLaunched}>
+            <Button variant="ghost" onClick={rePlan} disabled={anyLive}>
               <RotateCw className="h-3 w-3 mr-1" /> Re-plan
             </Button>
             <Button onClick={launchAll} disabled={subtasks.length === 0}>

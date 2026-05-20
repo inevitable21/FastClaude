@@ -371,6 +371,19 @@ impl Todos {
         Ok(())
     }
 
+    /// Clear `session_id` on every subtask under `todo_id`. Used before re-plan
+    /// to unblock `replace_subtasks`' "any session_id set" guard — the caller
+    /// is responsible for ensuring no LIVE session is still attached (otherwise
+    /// the orphaned session loses its parent pointer for the badge).
+    pub fn detach_all_sessions(&self, todo_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE subtasks SET session_id = NULL WHERE todo_id = ?1",
+            params![todo_id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_todo(&self, id: &str) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         // Manual cascade — SQLite's PRAGMA foreign_keys is per-connection and
@@ -562,6 +575,35 @@ mod tests {
         t.attach_session(&subs[0].id, "sess-1").unwrap();
         let err = t.replace_subtasks(&todo.id, &["x".into()]);
         assert!(matches!(err, Err(AppError::Invalid(_))));
+    }
+
+    #[test]
+    fn detach_all_sessions_nulls_session_ids_under_todo() {
+        let t = make();
+        let todo = t.create_todo("p", "do work").unwrap();
+        let subs = t.replace_subtasks(&todo.id, &["a".into(), "b".into()]).unwrap();
+        t.attach_session(&subs[0].id, "sess-1").unwrap();
+        t.attach_session(&subs[1].id, "sess-2").unwrap();
+        t.detach_all_sessions(&todo.id).unwrap();
+        let after = t.list_subtasks(&todo.id).unwrap();
+        assert!(after.iter().all(|s| s.session_id.is_none()));
+    }
+
+    #[test]
+    fn detach_all_sessions_does_not_touch_other_todos() {
+        let t = make();
+        let a = t.create_todo("p", "todo a").unwrap();
+        let b = t.create_todo("p", "todo b").unwrap();
+        let a_subs = t.replace_subtasks(&a.id, &["x".into()]).unwrap();
+        let b_subs = t.replace_subtasks(&b.id, &["y".into()]).unwrap();
+        t.attach_session(&a_subs[0].id, "sa").unwrap();
+        t.attach_session(&b_subs[0].id, "sb").unwrap();
+        t.detach_all_sessions(&a.id).unwrap();
+        assert!(t.list_subtasks(&a.id).unwrap()[0].session_id.is_none());
+        assert_eq!(
+            t.list_subtasks(&b.id).unwrap()[0].session_id.as_deref(),
+            Some("sb")
+        );
     }
 
     #[test]
