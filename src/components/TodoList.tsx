@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, X } from "lucide-react";
+import { Check, X, RotateCw } from "lucide-react";
 import {
   listTodos,
   markTodoFinished,
   dismissAutoSuggest,
+  planTodo,
   onTodoChanged,
 } from "@/lib/ipc";
 import type { Todo } from "@/types";
@@ -77,7 +78,21 @@ export function TodoList({ projectId, onOpenTodo, onAddTodo }: Props) {
                   <span className="text-[10px] text-muted-foreground">planning…</span>
                 )}
                 {t.planner_status === "planner_failed" && (
-                  <span className="text-[10px] text-destructive">planner failed</span>
+                  <span
+                    className="text-[10px] text-destructive cursor-help"
+                    title={t.planner_error ?? "planner failed"}
+                  >
+                    planner failed
+                  </span>
+                )}
+                {t.planner_status === "planner_failed" && (
+                  <button
+                    title="Retry planning"
+                    className="text-[10px] text-muted-foreground hover:text-foreground"
+                    onClick={(e) => { e.stopPropagation(); planTodo(t.id); }}
+                  >
+                    <RotateCw className="h-3 w-3" />
+                  </button>
                 )}
               </div>
               {t.auto_suggest_done_at && t.state !== "finished" && (

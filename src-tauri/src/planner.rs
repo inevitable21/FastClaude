@@ -1,6 +1,5 @@
 use crate::error::{AppError, AppResult};
 use serde::Deserialize;
-use std::sync::Mutex;
 use std::time::Duration;
 
 pub trait PlannerRunner: Send + Sync {
@@ -24,23 +23,60 @@ struct PlannerJson {
     subtasks: Vec<String>,
 }
 
+/// `claude -p --output-format json` wraps the assistant's text in this envelope.
+/// The model's actual reply is the `result` field (already a `String`, not nested
+/// JSON), and is what contains our `{"subtasks": [...]}` payload.
+#[derive(Debug, Deserialize)]
+struct ClaudeEnvelope {
+    result: Option<String>,
+    #[serde(default)]
+    is_error: bool,
+}
+
 pub fn parse_planner_output(stdout: &str) -> AppResult<Vec<String>> {
-    // claude -p with --output-format json wraps the model's text in a
-    // top-level envelope; the parser tolerates either the bare {"subtasks":..}
-    // form or an envelope where the text appears under a "result" or "response"
-    // field. We look for the first '{' that successfully parses, scanning the
-    // whole stdout — that's robust to leading log lines on stderr-into-stdout.
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
         return Err(AppError::PlannerFailed("planner returned empty output".into()));
     }
-    // Try direct parse.
+
+    // 1. Bare `{"subtasks": [...]}` — what `--output-format text` produces when
+    //    the model obeys the prompt strictly.
     if let Ok(p) = serde_json::from_str::<PlannerJson>(trimmed) {
         return validate(p.subtasks);
     }
-    // Try to locate an inner JSON object inside any wrapper.
+
+    // 2. `--output-format json` envelope: unwrap and parse the inner text.
+    if let Ok(env) = serde_json::from_str::<ClaudeEnvelope>(trimmed) {
+        if env.is_error {
+            let snippet: String = env
+                .result
+                .as_deref()
+                .unwrap_or(trimmed)
+                .chars()
+                .take(200)
+                .collect();
+            return Err(AppError::PlannerFailed(format!(
+                "claude reported is_error=true: {snippet}"
+            )));
+        }
+        if let Some(inner) = env.result {
+            return parse_inner_text(&inner);
+        }
+    }
+
+    // 3. Plain text with JSON somewhere inside (e.g. a model that wrapped
+    //    the reply in markdown). Scan for the first balanced `{...}` that
+    //    parses as PlannerJson.
+    parse_inner_text(trimmed)
+}
+
+fn parse_inner_text(text: &str) -> AppResult<Vec<String>> {
+    let trimmed = text.trim();
+    if let Ok(p) = serde_json::from_str::<PlannerJson>(trimmed) {
+        return validate(p.subtasks);
+    }
     let mut depth = 0i32;
-    let mut start = None;
+    let mut start: Option<usize> = None;
     for (i, ch) in trimmed.char_indices() {
         match ch {
             '{' => {
@@ -112,6 +148,7 @@ pub fn plan_subtasks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     /// Scripted runner — returns canned strings or errors in sequence.
     pub struct FakeRunner {
@@ -139,17 +176,53 @@ mod tests {
     }
 
     #[test]
-    fn parses_json_inside_envelope() {
-        let out = r#"{"result": "{\"subtasks\": [\"a\", \"b\"]}"}"#;
-        // First parse fails (top-level has no `subtasks`), but the scanner
-        // finds an inner balanced object. That inner object IS the envelope's
-        // top level, which has no `subtasks` — so this should fail. Use a
-        // realistic claude -p envelope where the text content sits unescaped.
-        let out2 = "Some log line\n{\"subtasks\": [\"a\", \"b\"]}";
-        let parsed = parse_planner_output(out2).unwrap();
+    fn parses_json_inside_text_envelope() {
+        // Plain text wrapping (e.g. model added a leading log line) — scanner
+        // finds the inner balanced object.
+        let out = "Some log line\n{\"subtasks\": [\"a\", \"b\"]}";
+        let parsed = parse_planner_output(out).unwrap();
         assert_eq!(parsed, vec!["a", "b"]);
-        // Confirm the escaped-inside case errors cleanly (we don't recurse).
-        assert!(matches!(parse_planner_output(out), Err(AppError::PlannerFailed(_))));
+    }
+
+    #[test]
+    fn parses_claude_p_json_envelope() {
+        // What `claude -p --output-format json` actually returns: a top-level
+        // envelope whose `result` field is the model's text reply.
+        let envelope = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "duration_ms": 12345,
+            "result": "{\"subtasks\": [\"refactor auth\", \"add tests\"]}",
+            "session_id": "abc",
+        });
+        let out = serde_json::to_string(&envelope).unwrap();
+        let parsed = parse_planner_output(&out).unwrap();
+        assert_eq!(parsed, vec!["refactor auth", "add tests"]);
+    }
+
+    #[test]
+    fn parses_envelope_with_markdown_wrapped_result() {
+        // Models sometimes wrap JSON in a ```json fence even when asked not to.
+        let envelope = serde_json::json!({
+            "type": "result",
+            "is_error": false,
+            "result": "Sure, here you go:\n```json\n{\"subtasks\": [\"one\", \"two\"]}\n```",
+        });
+        let out = serde_json::to_string(&envelope).unwrap();
+        let parsed = parse_planner_output(&out).unwrap();
+        assert_eq!(parsed, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn rejects_envelope_marked_is_error() {
+        let envelope = serde_json::json!({
+            "type": "result",
+            "is_error": true,
+            "result": "rate limit exceeded",
+        });
+        let out = serde_json::to_string(&envelope).unwrap();
+        assert!(matches!(parse_planner_output(&out), Err(AppError::PlannerFailed(_))));
     }
 
     #[test]
