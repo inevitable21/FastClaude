@@ -20,15 +20,30 @@ export function ProjectPane({ project, onLaunch }: Props) {
   const [draftName, setDraftName] = useState(project.display_name);
 
   const refresh = useCallback(() => {
-    listSessions().then((all) => {
-      const norm = project.norm_path;
-      setSessions(
-        all.filter(
-          (s) => s.project_dir.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "") === norm,
-        ),
-      );
-    }).catch(() => setSessions([]));
-  }, [project.norm_path]);
+    listSessions()
+      .then((all) => {
+        const norm = project.norm_path;
+        setSessions(
+          all.filter((s) => {
+            // Primary match: explicit project id assignment. Falls back to
+            // path-based matching for legacy rows that still carry the
+            // "Default Project" sentinel. Once the user has explicitly moved
+            // a session via the context menu, the explicit assignment wins
+            // even if its project_dir matches some other project's path.
+            if (s.project === project.id) return true;
+            if (s.project === "Default Project") {
+              const sNorm = s.project_dir
+                .replace(/\\/g, "/")
+                .toLowerCase()
+                .replace(/\/+$/, "");
+              return sNorm === norm;
+            }
+            return false;
+          }),
+        );
+      })
+      .catch(() => setSessions([]));
+  }, [project.id, project.norm_path]);
 
   useEffect(() => {
     refresh();
@@ -83,7 +98,9 @@ export function ProjectPane({ project, onLaunch }: Props) {
         {sessions.length === 0 ? (
           <div className="text-xs text-muted-foreground">No sessions in this project.</div>
         ) : (
-          sessions.map((s, i) => <SessionRow key={s.id} session={s} onChange={refresh} index={i} />)
+          sessions.map((s, i) => (
+            <SessionRow key={s.id} session={s} onChange={refresh} index={i} hideProjectName />
+          ))
         )}
       </section>
       <TodoDialog

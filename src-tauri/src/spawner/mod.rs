@@ -29,6 +29,11 @@ pub struct SpawnRequest {
     /// Free-form extra args appended verbatim before the prompt.
     #[serde(default)]
     pub extra_args: String,
+    /// True when this launch was originated by a TODO subtask. Spawners set
+    /// `FASTCLAUDE_TODO_SESSION=1` on the child process so a SessionStart hook
+    /// in the user's Claude Code settings can recognize it and adjust behavior.
+    #[serde(default)]
+    pub from_todo: bool,
 }
 
 /// Build the `claude` command string from the launch parameters. Pure so

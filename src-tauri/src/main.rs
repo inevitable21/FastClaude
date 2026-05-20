@@ -175,6 +175,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::list_sessions,
             commands::list_all_sessions,
+            commands::list_sessions_for_project,
             commands::launch_session,
             commands::kill_session,
             commands::delete_session,
@@ -186,6 +187,8 @@ fn main() {
             commands::set_config,
             commands::set_auto_continue,
             commands::set_resume_prompt,
+            commands::set_session_title,
+            commands::set_session_project,
             commands::preview_launch_command,
             commands::get_first_run,
             commands::clear_first_run,

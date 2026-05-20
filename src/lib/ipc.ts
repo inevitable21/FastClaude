@@ -91,6 +91,14 @@ export async function setResumePrompt(id: string, prompt: string | null): Promis
   return invoke<void>("set_resume_prompt", { id, prompt });
 }
 
+export async function setSessionTitle(id: string, title: string): Promise<void> {
+  return invoke<void>("set_session_title", { id, title });
+}
+
+export async function setSessionProject(id: string, project: string): Promise<void> {
+  return invoke<void>("set_session_project", { id, project });
+}
+
 export async function onAutoContinueFired(handler: (id: string) => void): Promise<UnlistenFn> {
   return listen<string>("auto-continue-fired", (e) => handler(e.payload));
 }

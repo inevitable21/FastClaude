@@ -45,10 +45,26 @@ impl Status {
     }
 }
 
+/// Default identifier persisted on the `project` column when a caller
+/// inserts a session without an explicit project association. Also the
+/// value backfilled for legacy rows that pre-date the column.
+pub const DEFAULT_PROJECT: &str = "Default Project";
+
+/// Default value persisted on the `title` column when a caller inserts a
+/// session without an explicit title. Also the value backfilled for legacy
+/// rows that pre-date the column.
+pub const DEFAULT_TITLE: &str = "Untitled";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Session {
     pub id: String,
     pub project_dir: String,
+    /// Project identifier this session belongs to. Usually the `projects.id`
+    /// UUID of the row created by `Projects::upsert_for_path`, but falls back
+    /// to [`DEFAULT_PROJECT`] for legacy rows and callers that don't pass one.
+    pub project: String,
+    /// Human-readable title for this session. Defaults to [`DEFAULT_TITLE`].
+    pub title: String,
     pub model: String,
     pub claude_pid: i64,
     pub terminal_pid: i64,
@@ -77,6 +93,11 @@ pub struct Session {
 #[derive(Debug, Clone)]
 pub struct NewSession {
     pub project_dir: String,
+    /// Optional project identifier (typically `projects.id`). None falls back
+    /// to [`DEFAULT_PROJECT`] at insert time.
+    pub project: Option<String>,
+    /// Optional human-readable title. None falls back to [`DEFAULT_TITLE`].
+    pub title: Option<String>,
     pub model: String,
     pub claude_pid: i64,
     pub terminal_pid: i64,
@@ -105,7 +126,8 @@ const SESSION_COLS: &str = "id, project_dir, model, claude_pid, terminal_pid, \
     terminal_window_handle, started_at, ended_at, jsonl_path, jsonl_offset, \
     status, last_activity_at, tokens_in, tokens_out, tokens_cache_read, \
     tokens_cache_write, auto_continue, resume_prompt, next_resume_at, \
-    resume_count, resume_cap, resumed_into, resume_failures, subtask_id";
+    resume_count, resume_cap, resumed_into, resume_failures, subtask_id, \
+    project, title";
 
 impl Registry {
     pub fn open(path: &Path) -> AppResult<Self> {
@@ -151,7 +173,9 @@ impl Registry {
                 resume_cap INTEGER NOT NULL DEFAULT 3,
                 resumed_into TEXT,
                 resume_failures INTEGER NOT NULL DEFAULT 0,
-                subtask_id TEXT
+                subtask_id TEXT,
+                project TEXT NOT NULL DEFAULT 'Default Project',
+                title TEXT NOT NULL DEFAULT 'Untitled'
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_active
               ON sessions(ended_at) WHERE ended_at IS NULL;
@@ -170,15 +194,20 @@ impl Registry {
             "ALTER TABLE sessions ADD COLUMN resumed_into TEXT",
             "ALTER TABLE sessions ADD COLUMN resume_failures INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN subtask_id TEXT",
+            "ALTER TABLE sessions ADD COLUMN project TEXT NOT NULL DEFAULT 'Default Project'",
+            "ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT 'Untitled'",
         ];
         for sql in migrations {
             let _ = conn.execute(sql, []);
         }
-        // Step 3: create the index on next_resume_at only after the ALTER migrations
-        // have guaranteed the column exists (whether this is a fresh or legacy DB).
+        // Step 3: create indexes on columns that may have just been added by
+        // the ALTER migrations above (so they're guaranteed to exist on both
+        // fresh and legacy DBs).
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_sessions_pending_resume \
-             ON sessions(next_resume_at) WHERE next_resume_at IS NOT NULL;",
+               ON sessions(next_resume_at) WHERE next_resume_at IS NOT NULL; \
+             CREATE INDEX IF NOT EXISTS idx_sessions_project \
+               ON sessions(project);",
         )?;
         Ok(())
     }
@@ -187,9 +216,21 @@ impl Registry {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
         let resume_cap = if n.resume_cap > 0 { n.resume_cap } else { 3 };
+        // Empty strings collapse to the same defaults as `None` so callers
+        // can't accidentally persist blank values.
+        let project = n
+            .project
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_PROJECT.to_string());
+        let title = n
+            .title
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_TITLE.to_string());
         let s = Session {
             id: id.clone(),
             project_dir: n.project_dir,
+            project,
+            title,
             model: n.model,
             claude_pid: n.claude_pid,
             terminal_pid: n.terminal_pid,
@@ -220,14 +261,14 @@ impl Registry {
                 (id, project_dir, model, claude_pid, terminal_pid, terminal_window_handle,
                  started_at, status, last_activity_at,
                  auto_continue, resume_prompt, resume_count, resume_cap,
-                 jsonl_path, jsonl_offset, subtask_id)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                 jsonl_path, jsonl_offset, subtask_id, project, title)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
             "#,
             params![
                 s.id, s.project_dir, s.model, s.claude_pid, s.terminal_pid,
                 s.terminal_window_handle, s.started_at, s.status.as_str(), s.last_activity_at,
                 s.auto_continue as i64, s.resume_prompt, s.resume_count, s.resume_cap,
-                s.jsonl_path, s.jsonl_offset, s.subtask_id,
+                s.jsonl_path, s.jsonl_offset, s.subtask_id, s.project, s.title,
             ],
         )?;
         Ok(s)
@@ -239,6 +280,24 @@ impl Registry {
 
     pub fn list_all(&self) -> AppResult<Vec<Session>> {
         self.list_where("1=1 ORDER BY started_at DESC")
+    }
+
+    /// Sessions whose `project` column equals `project` (exact match,
+    /// case-sensitive), newest first. Use the project's `id` as the key for
+    /// rows inserted by the launch path; legacy rows backfilled by the
+    /// migration carry [`DEFAULT_PROJECT`].
+    pub fn list_for_project(&self, project: &str) -> AppResult<Vec<Session>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT {SESSION_COLS} FROM sessions WHERE project = ?1 ORDER BY started_at DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![project], row_to_session)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     /// Returns map of `normalized(project_dir) -> max(started_at)` across all
@@ -374,6 +433,43 @@ impl Registry {
         let n = conn.execute(
             "UPDATE sessions SET jsonl_path = ?1 WHERE id = ?2",
             params![path, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
+    /// Rename a session's human-readable title. Empty/whitespace is rejected
+    /// so the UI doesn't end up with blank labels.
+    pub fn set_title(&self, id: &str, title: &str) -> AppResult<()> {
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Invalid("title is empty".into()));
+        }
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sessions SET title = ?1 WHERE id = ?2",
+            params![trimmed, id],
+        )?;
+        if n == 0 {
+            return Err(AppError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
+    /// Reassign this session to a different project. Caller passes whatever
+    /// identifier they want stored — usually a `projects.id` UUID, but the
+    /// registry doesn't own that schema so it doesn't validate.
+    pub fn set_project(&self, id: &str, project: &str) -> AppResult<()> {
+        let trimmed = project.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::Invalid("project id is empty".into()));
+        }
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE sessions SET project = ?1 WHERE id = ?2",
+            params![trimmed, id],
         )?;
         if n == 0 {
             return Err(AppError::NotFound(format!("session {id}")));
@@ -603,6 +699,8 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Session> {
         resumed_into: row.get(21)?,
         resume_failures: row.get(22)?,
         subtask_id: row.get(23)?,
+        project: row.get(24)?,
+        title: row.get(25)?,
     })
 }
 
@@ -617,6 +715,8 @@ mod tests {
     fn new_sess(dir: &str) -> NewSession {
         NewSession {
             project_dir: dir.into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1234,
             terminal_pid: 1230,
@@ -757,6 +857,27 @@ mod tests {
     }
 
     #[test]
+    fn set_title_persists_and_rejects_blank() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().title, DEFAULT_TITLE);
+        r.set_title(&s.id, "Refactor the auth module").unwrap();
+        assert_eq!(r.get(&s.id).unwrap().title, "Refactor the auth module");
+        assert!(matches!(r.set_title(&s.id, "   "), Err(AppError::Invalid(_))));
+        assert!(matches!(r.set_title("nope", "anything"), Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn set_project_persists_and_rejects_blank() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().project, DEFAULT_PROJECT);
+        r.set_project(&s.id, "proj-123").unwrap();
+        assert_eq!(r.get(&s.id).unwrap().project, "proj-123");
+        assert!(matches!(r.set_project(&s.id, "   "), Err(AppError::Invalid(_))));
+    }
+
+    #[test]
     fn insert_defaults_auto_continue_fields() {
         let r = make();
         let s = r.insert(new_sess("/p")).unwrap();
@@ -774,6 +895,8 @@ mod tests {
         let r = make();
         let bad = NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -841,6 +964,8 @@ mod tests {
         let r = make();
         let armed = r.insert(NewSession {
             project_dir: "/a".into(),
+            project: None,
+            title: None,
             model: "m".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -859,6 +984,8 @@ mod tests {
         // Cap-reached row: armed but resume_count == resume_cap
         let capped = r.insert(NewSession {
             project_dir: "/c".into(),
+            project: None,
+            title: None,
             model: "m".into(),
             claude_pid: 3,
             terminal_pid: 4,
@@ -887,6 +1014,8 @@ mod tests {
         let r = make();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "m".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -913,6 +1042,8 @@ mod tests {
         let r = make();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "m".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -937,6 +1068,8 @@ mod tests {
         let r = make();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "m".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -1057,5 +1190,182 @@ mod tests {
         let r = Registry::open(&path).unwrap();
         let got = r.get("legacy").unwrap();
         assert_eq!(got.subtask_id, None);
+    }
+
+    // ───────────────────────── project + title ──────────────────────────
+    //
+    // These cover the requirement that every session row carries a project
+    // identifier and a human-readable title, with sensible fallbacks when
+    // callers don't supply them and a working migration for legacy DBs.
+
+    #[test]
+    fn insert_with_explicit_project_and_title_round_trips() {
+        let r = make();
+        let n = NewSession {
+            project: Some("proj-xyz".into()),
+            title: Some("Implement OAuth".into()),
+            ..new_sess("/p")
+        };
+        let s = r.insert(n).unwrap();
+        assert_eq!(s.project, "proj-xyz");
+        assert_eq!(s.title, "Implement OAuth");
+        let fetched = r.get(&s.id).unwrap();
+        assert_eq!(fetched.project, "proj-xyz");
+        assert_eq!(fetched.title, "Implement OAuth");
+    }
+
+    #[test]
+    fn insert_without_project_or_title_uses_defaults() {
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        assert_eq!(s.project, DEFAULT_PROJECT);
+        assert_eq!(s.title, DEFAULT_TITLE);
+    }
+
+    #[test]
+    fn insert_treats_blank_strings_as_missing() {
+        // Whitespace-only strings should collapse to the same defaults — keeps
+        // callers from accidentally persisting "" or "   ".
+        let r = make();
+        let n = NewSession {
+            project: Some("   ".into()),
+            title: Some("".into()),
+            ..new_sess("/p")
+        };
+        let s = r.insert(n).unwrap();
+        assert_eq!(s.project, DEFAULT_PROJECT);
+        assert_eq!(s.title, DEFAULT_TITLE);
+    }
+
+    #[test]
+    fn list_for_project_returns_only_matching_rows() {
+        let r = make();
+        let a1 = r.insert(NewSession {
+            project: Some("proj-a".into()),
+            title: Some("a1".into()),
+            ..new_sess("/p/a")
+        }).unwrap();
+        let a2 = r.insert(NewSession {
+            project: Some("proj-a".into()),
+            title: Some("a2".into()),
+            ..new_sess("/p/a")
+        }).unwrap();
+        let _b = r.insert(NewSession {
+            project: Some("proj-b".into()),
+            title: Some("b1".into()),
+            ..new_sess("/p/b")
+        }).unwrap();
+        let listed = r.list_for_project("proj-a").unwrap();
+        let ids: std::collections::HashSet<_> = listed.iter().map(|s| s.id.clone()).collect();
+        assert_eq!(listed.len(), 2, "two sessions belong to proj-a");
+        assert!(ids.contains(&a1.id));
+        assert!(ids.contains(&a2.id));
+    }
+
+    #[test]
+    fn list_for_project_is_empty_when_no_match() {
+        let r = make();
+        r.insert(NewSession {
+            project: Some("proj-a".into()),
+            ..new_sess("/p")
+        }).unwrap();
+        assert!(r.list_for_project("proj-missing").unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_for_project_orders_newest_first() {
+        // Same project, two rows. Newest started_at must come first.
+        // started_at is taken from system time at insert; we read both and
+        // assert the order tracks `started_at DESC`.
+        let r = make();
+        let older = r.insert(NewSession {
+            project: Some("proj-a".into()),
+            ..new_sess("/p")
+        }).unwrap();
+        // Sleep is brittle in tests, so we instead reach in via raw SQL to
+        // backdate the first row by 100 seconds.
+        {
+            let conn = r.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE sessions SET started_at = started_at - 100 WHERE id = ?1",
+                params![older.id],
+            ).unwrap();
+        }
+        let newer = r.insert(NewSession {
+            project: Some("proj-a".into()),
+            ..new_sess("/p")
+        }).unwrap();
+        let listed = r.list_for_project("proj-a").unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, newer.id, "newest first");
+        assert_eq!(listed[1].id, older.id);
+    }
+
+    #[test]
+    fn list_for_project_finds_default_project_sentinel() {
+        // Rows inserted without an explicit project should be retrievable by
+        // querying the DEFAULT_PROJECT sentinel — important for the migration
+        // path where every legacy row carries this value.
+        let r = make();
+        let s = r.insert(new_sess("/p")).unwrap();
+        let listed = r.list_for_project(DEFAULT_PROJECT).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, s.id);
+    }
+
+    #[test]
+    fn open_legacy_db_backfills_project_and_title_defaults() {
+        // A DB created before the project/title columns existed must come
+        // back online with DEFAULT_PROJECT / DEFAULT_TITLE on every row.
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                project_dir TEXT NOT NULL,
+                model TEXT NOT NULL,
+                claude_pid INTEGER NOT NULL,
+                terminal_pid INTEGER NOT NULL,
+                terminal_window_handle TEXT,
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                jsonl_path TEXT,
+                jsonl_offset INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                last_activity_at INTEGER NOT NULL,
+                tokens_in INTEGER NOT NULL DEFAULT 0,
+                tokens_out INTEGER NOT NULL DEFAULT 0,
+                tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+                tokens_cache_write INTEGER NOT NULL DEFAULT 0,
+                auto_continue INTEGER NOT NULL DEFAULT 0,
+                resume_prompt TEXT,
+                next_resume_at INTEGER,
+                resume_count INTEGER NOT NULL DEFAULT 0,
+                resume_cap INTEGER NOT NULL DEFAULT 3,
+                resumed_into TEXT,
+                resume_failures INTEGER NOT NULL DEFAULT 0,
+                subtask_id TEXT
+            );
+            INSERT INTO sessions
+                (id, project_dir, model, claude_pid, terminal_pid,
+                 started_at, status, last_activity_at)
+            VALUES ('legacy', '/p', 'm', 1, 2, 1000, 'running', 1000);
+            "#,
+        ).unwrap();
+        drop(conn);
+
+        let r = Registry::open(&path).unwrap();
+        let got = r.get("legacy").unwrap();
+        assert_eq!(got.project, DEFAULT_PROJECT,
+            "legacy row must be backfilled with the DEFAULT_PROJECT sentinel");
+        assert_eq!(got.title, DEFAULT_TITLE,
+            "legacy row must be backfilled with the DEFAULT_TITLE sentinel");
+        // And the sentinel is queryable via list_for_project.
+        let listed = r.list_for_project(DEFAULT_PROJECT).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "legacy");
     }
 }

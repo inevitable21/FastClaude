@@ -21,6 +21,7 @@ import {
   recentProjects,
   getConfig,
   previewLaunchCommand,
+  listProjects,
 } from "@/lib/ipc";
 import { MODELS } from "@/lib/models";
 import {
@@ -30,7 +31,7 @@ import {
   fromUnset,
   toUnset,
 } from "@/lib/launch-options";
-import type { RecentProject, AppConfig } from "@/types";
+import type { RecentProject, AppConfig, Project } from "@/types";
 
 export function LaunchDialog({
   open,
@@ -44,6 +45,7 @@ export function LaunchDialog({
   const { toast } = useToast();
   const [recents, setRecents] = useState<RecentProject[]>([]);
   const [cfg, setCfg] = useState<AppConfig | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [projectDir, setProjectDir] = useState("");
   const [model, setModel] = useState<string>(MODELS[0]);
   const [prompt, setPrompt] = useState("");
@@ -57,6 +59,14 @@ export function LaunchDialog({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [recentIndex, setRecentIndex] = useState<number | null>(null);
+  // Session title (free text) + project name (autocomplete over existing
+  // projects). projectId is the resolved Project.id when the typed name
+  // exactly matches one; null means "let the backend auto-upsert from the
+  // folder path".
+  const [title, setTitle] = useState<string>("");
+  const [projectName, setProjectName] = useState<string>("");
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [showProjectSuggestions, setShowProjectSuggestions] = useState(false);
   const recentRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -87,7 +97,12 @@ export function LaunchDialog({
     if (!open) return;
     setErr(null);
     setRecentIndex(null);
+    setTitle("");
+    setProjectName("");
+    setProjectId(null);
+    setShowProjectSuggestions(false);
     recentProjects(10).then(setRecents).catch(() => setRecents([]));
+    listProjects().then(setProjects).catch(() => setProjects([]));
     getConfig()
       .then((c) => {
         setCfg(c);
@@ -102,6 +117,33 @@ export function LaunchDialog({
       })
       .catch(() => {});
   }, [open]);
+
+  // When the user picks a folder, default the project name to whatever
+  // matches that path so the autocomplete shows the right pick. They can
+  // still override.
+  useEffect(() => {
+    if (!projectDir) return;
+    const norm = projectDir.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+    const match = projects.find((p) => p.norm_path === norm);
+    if (match) {
+      setProjectName(match.display_name);
+      setProjectId(match.id);
+    } else if (!projectName) {
+      // Auto-fill from the folder's last segment, but only if the user
+      // hasn't typed anything yet.
+      const guess = norm.split("/").filter(Boolean).pop() ?? "";
+      setProjectName(guess);
+      setProjectId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectDir, projects]);
+
+  // Filter projects by typed prefix; empty input shows all.
+  const projectSuggestions = projectName.trim()
+    ? projects.filter((p) =>
+        p.display_name.toLowerCase().includes(projectName.trim().toLowerCase()),
+      )
+    : projects;
 
 
   // Live preview — backend builds the exact command so the preview matches reality.
@@ -136,6 +178,17 @@ export function LaunchDialog({
     setBusy(true);
     setErr(null);
     try {
+      // Project name autocomplete: only pass an explicit project_id when
+      // the typed name resolves to an existing project. Anything else
+      // (blank, novel typed name) falls through to the backend's
+      // auto-upsert from project_dir.
+      const trimmedName = projectName.trim();
+      const matched = trimmedName
+        ? projects.find(
+            (p) => p.display_name.toLowerCase() === trimmedName.toLowerCase(),
+          )
+        : null;
+      const resolvedProjectId = matched?.id ?? projectId ?? undefined;
       await launchSession({
         project_dir: dir,
         model,
@@ -145,12 +198,17 @@ export function LaunchDialog({
         extra_args: extraArgs,
         auto_continue: autoContinue,
         resume_prompt: resumePromptOverride.trim() || undefined,
+        title: title.trim() || undefined,
+        project: resolvedProjectId,
       });
       toast({ title: "Session launched" });
       onLaunched();
       onOpenChange(false);
       setProjectDir("");
       setPrompt("");
+      setTitle("");
+      setProjectName("");
+      setProjectId(null);
       setRecentIndex(null);
     } catch (e: unknown) {
       setErr(typeof e === "string" ? e : (e as { message?: string })?.message ?? String(e));
@@ -266,6 +324,60 @@ export function LaunchDialog({
                 ))}
               </div>
             )}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="relative">
+              <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">
+                Project
+              </label>
+              <Input
+                value={projectName}
+                onChange={(e) => {
+                  setProjectName(e.target.value);
+                  setProjectId(null);
+                  setShowProjectSuggestions(true);
+                }}
+                onFocus={() => setShowProjectSuggestions(true)}
+                onBlur={() =>
+                  // Delay so an onClick on a suggestion fires before blur hides it.
+                  setTimeout(() => setShowProjectSuggestions(false), 120)
+                }
+                placeholder="Project name (autocomplete)"
+              />
+              {showProjectSuggestions && projectSuggestions.length > 0 && (
+                <div className="absolute z-10 left-0 right-0 mt-1 max-h-40 overflow-auto rounded-md border border-border input-fill shadow-lg">
+                  {projectSuggestions.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onMouseDown={(e) => {
+                        // Use onMouseDown so the click registers before
+                        // the input's onBlur fires.
+                        e.preventDefault();
+                        setProjectName(p.display_name);
+                        setProjectId(p.id);
+                        setShowProjectSuggestions(false);
+                      }}
+                      className={`block w-full text-left px-2 py-1 text-xs hover:bg-foreground/[0.06] ${
+                        projectId === p.id ? "text-accent" : ""
+                      }`}
+                    >
+                      {p.display_name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">
+                Title (optional)
+              </label>
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Fix login redirect"
+              />
+            </div>
           </div>
           <div>
             <label className="text-[10px] uppercase tracking-[0.10em] text-muted-foreground">Model</label>

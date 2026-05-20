@@ -257,6 +257,13 @@ impl Spawner for WindowsSpawner {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
+        // Mark TODO-originated launches so the spawned Claude Code session can
+        // detect it via a SessionStart hook. wt.exe and cmd.exe both inherit
+        // and propagate the parent's env block, so claude.exe sees this var.
+        if req.from_todo {
+            cmd.env("FASTCLAUDE_TODO_SESSION", "1");
+        }
+
         // Snapshot existing host-window HWNDs *before* spawn so we can identify
         // the one our launch creates.
         let pre_hwnds = enumerate_host_windows();
@@ -480,6 +487,7 @@ mod tests {
             effort: String::new(),
             permission_mode: String::new(),
             extra_args: String::new(),
+            from_todo: false,
         }
     }
 
@@ -690,6 +698,7 @@ mod tests {
             effort: String::new(),
             permission_mode: String::new(),
             extra_args: String::new(),
+            from_todo: false,
         };
         let err = spawner.spawn(&req).unwrap_err();
         assert!(matches!(err, AppError::ClaudeNotOnPath), "expected ClaudeNotOnPath, got {err:?}");

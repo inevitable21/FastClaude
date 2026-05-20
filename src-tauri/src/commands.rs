@@ -57,6 +57,17 @@ pub struct LaunchInput {
     /// stored on the session row so the dashboard can render the parent badge.
     #[serde(default)]
     pub subtask_id: Option<String>,
+    /// Optional human-readable title for the session. None falls back to the
+    /// project display name (or [`crate::session_registry::DEFAULT_TITLE`] if
+    /// the project upsert failed).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Optional explicit `projects.id` to associate this session with. When
+    /// None the launch path auto-upserts a project from `project_dir` and
+    /// uses that id. Pass this when the user picked a different project from
+    /// the LaunchDialog autocomplete that doesn't match the folder.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 #[tauri::command]
@@ -70,6 +81,14 @@ pub fn list_all_sessions(state: State<'_, AppState>) -> AppResult<Vec<Session>> 
 }
 
 #[tauri::command]
+pub fn list_sessions_for_project(
+    state: State<'_, AppState>,
+    project: String,
+) -> AppResult<Vec<Session>> {
+    state.registry.list_for_project(&project)
+}
+
+#[tauri::command]
 pub fn launch_session(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -77,6 +96,18 @@ pub fn launch_session(
 ) -> AppResult<Session> {
     let cfg = state.config.lock().unwrap().clone();
     let model = input.model.unwrap_or(cfg.default_model.clone());
+    let from_todo = input.subtask_id.is_some();
+    // TODO-originated launches always run autonomously: bypass permission
+    // prompts unless the caller explicitly chose a different mode for this
+    // specific launch. The matching SessionStart hook in the user's Claude
+    // settings further suppresses AskUserQuestion-style multi-choice prompts.
+    let permission_mode = input.permission_mode.unwrap_or_else(|| {
+        if from_todo {
+            "bypassPermissions".to_string()
+        } else {
+            cfg.default_permission_mode.clone()
+        }
+    });
     let req = SpawnRequest {
         project_dir: input.project_dir.clone(),
         model: model.clone(),
@@ -84,16 +115,34 @@ pub fn launch_session(
         terminal_program: cfg.terminal_program.clone(),
         resume: input.resume,
         effort: input.effort.unwrap_or_else(|| cfg.default_effort.clone()),
-        permission_mode: input
-            .permission_mode
-            .unwrap_or_else(|| cfg.default_permission_mode.clone()),
+        permission_mode,
         extra_args: input
             .extra_args
             .unwrap_or_else(|| cfg.default_extra_args.clone()),
+        from_todo,
     };
     let result = state.spawner.spawn(&req)?;
+    // Auto-create / refresh the project entry so the sidebar reflects this
+    // folder, AND so we have a stable project id to store on the session.
+    // A failure to upsert is non-fatal — we fall back to None and the
+    // registry will persist the DEFAULT_PROJECT sentinel.
+    let project_record = state.projects.upsert_for_path(&input.project_dir).ok();
+    // Explicit caller-supplied project id wins; otherwise fall back to the
+    // auto-upserted project from the folder path.
+    let project = input
+        .project
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| project_record.as_ref().map(|p| p.id.clone()));
+    // Title is left to the caller, or — when omitted — to the poller's
+    // first-exchange auto-titler. We intentionally don't fall back to the
+    // project's display name here: that would leave every session titled
+    // after the folder, defeating the per-session summarization.
+    let title = input.title.clone();
     let session = state.registry.insert(NewSession {
         project_dir: input.project_dir.clone(),
+        project,
+        title,
         model,
         claude_pid: result.claude_pid,
         terminal_pid: result.terminal_pid,
@@ -106,9 +155,6 @@ pub fn launch_session(
         jsonl_offset: 0,
         subtask_id: input.subtask_id.clone(),
     })?;
-    // Auto-create / refresh the project entry so the sidebar reflects this
-    // folder. Errors are non-fatal — the session is already live.
-    let _ = state.projects.upsert_for_path(&input.project_dir);
     let _ = app.emit("session-changed", &session);
     Ok(session)
 }
@@ -260,6 +306,30 @@ pub fn set_resume_prompt(
 ) -> AppResult<()> {
     state.registry.set_resume_prompt(&id, prompt.as_deref())?;
     let _ = app.emit("session-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_session_title(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+) -> AppResult<()> {
+    state.registry.set_title(&id, &title)?;
+    let _ = app.emit("session-changed", &id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_session_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    project: String,
+) -> AppResult<()> {
+    state.registry.set_project(&id, &project)?;
+    let _ = app.emit("session-changed", &id);
     Ok(())
 }
 
@@ -735,6 +805,13 @@ pub fn launch_subtask(
         auto_continue: None,
         resume_prompt: None,
         subtask_id: Some(subtask_id.clone()),
+        // Title comes from the subtask text (truncated by the registry-side
+        // default if empty). Gives the dashboard a row label that mirrors
+        // what the human asked the subtask to do.
+        title: Some(subtask.text.clone()),
+        // Stamp the session with the project this todo belongs to so it groups
+        // correctly under the same project as the parent todo in list views.
+        project: Some(project.id.clone()),
     };
     let session = launch_session(app.clone(), state.clone(), input)?;
     state.todos.attach_session(&subtask_id, &session.id)?;
@@ -853,6 +930,8 @@ mod tests {
         let r = Registry::open_in_memory().unwrap();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "m".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -876,6 +955,8 @@ mod tests {
         let r = Registry::open_in_memory().unwrap();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "m".into(),
             claude_pid: 1,
             terminal_pid: 2,

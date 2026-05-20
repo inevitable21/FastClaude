@@ -1,7 +1,8 @@
 use crate::config::Config;
 use crate::error::AppResult;
 use crate::recent_projects;
-use crate::session_registry::{Registry, Session, Status};
+use crate::session_registry::{Registry, Session, Status, DEFAULT_TITLE};
+use crate::title;
 use crate::usage_reader;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,6 +53,14 @@ pub fn fire_due_resumes(
             .clone()
             .unwrap_or_else(|| cfg.default_resume_prompt.clone());
 
+        let from_todo = s.subtask_id.is_some();
+        // Resumed TODO sessions stay autonomous — bypass permissions like the
+        // original launch in commands::launch_session.
+        let permission_mode = if from_todo {
+            "bypassPermissions".to_string()
+        } else {
+            cfg.default_permission_mode.clone()
+        };
         let req = crate::spawner::SpawnRequest {
             project_dir: s.project_dir.clone(),
             model: s.model.clone(),
@@ -59,14 +68,19 @@ pub fn fire_due_resumes(
             terminal_program: cfg.terminal_program.clone(),
             resume: Some(uuid),
             effort: cfg.default_effort.clone(),
-            permission_mode: cfg.default_permission_mode.clone(),
+            permission_mode,
             extra_args: cfg.default_extra_args.clone(),
+            from_todo,
         };
 
         match spawner.spawn(&req) {
             Ok(result) => {
                 let new_row = registry.insert(crate::session_registry::NewSession {
                     project_dir: s.project_dir.clone(),
+                    // Successor inherits predecessor's project + title so the
+                    // chain stays grouped under one project in the UI.
+                    project: Some(s.project.clone()),
+                    title: Some(s.title.clone()),
                     model: s.model.clone(),
                     claude_pid: result.claude_pid,
                     terminal_pid: result.terminal_pid,
@@ -187,6 +201,19 @@ pub fn tick(
                     registry.set_status(&s.id, Status::Running)?;
                 }
                 report.usage_changed = true;
+
+                // First-exchange title generation. Triggered the tick after
+                // claude wrote its first assistant tokens, while the row still
+                // carries the default placeholder. Failures are non-fatal —
+                // the title just stays "Untitled" until a later trigger or the
+                // user renames it.
+                if s.title == DEFAULT_TITLE && delta.tokens_out > 0 {
+                    if let Ok(Some(raw)) = title::extract_first_user_message(&jsonl) {
+                        if let Some(t) = title::derive_title(&raw) {
+                            let _ = registry.set_title(&s.id, &t);
+                        }
+                    }
+                }
 
                 // Arm pending resume if claude reported a rate-limit.
                 // set_pending_resume is gated on auto_continue=1, below cap, AND
@@ -354,6 +381,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(crate::session_registry::NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -402,6 +431,8 @@ mod tests {
         let cfg = Config { default_resume_prompt: "global continue".into(), ..Config::default() };
         let s = r.insert(crate::session_registry::NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -429,6 +460,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(crate::session_registry::NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -457,6 +490,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(crate::session_registry::NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -486,6 +521,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(crate::session_registry::NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -526,6 +563,8 @@ mod tests {
         let alive = r
             .insert(NewSession {
                 project_dir: "/p/a".into(),
+                project: None,
+                title: None,
                 model: "claude-opus-4-7".into(),
                 claude_pid: 100,
                 terminal_pid: 99,
@@ -542,6 +581,8 @@ mod tests {
         let dead = r
             .insert(NewSession {
                 project_dir: "/p/b".into(),
+                project: None,
+                title: None,
                 model: "claude-opus-4-7".into(),
                 claude_pid: 200,
                 terminal_pid: 199,
@@ -575,6 +616,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -641,6 +684,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -682,6 +727,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -716,6 +763,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(crate::session_registry::NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,
@@ -758,6 +807,8 @@ mod tests {
         let cfg = Config::default();
         let s = r.insert(NewSession {
             project_dir: "/p".into(),
+            project: None,
+            title: None,
             model: "claude-opus-4-7".into(),
             claude_pid: 1,
             terminal_pid: 2,

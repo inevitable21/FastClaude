@@ -3,6 +3,10 @@ export type SessionStatus = "running" | "idle" | "ended";
 export interface Session {
   id: string;
   project_dir: string;
+  /** Project identifier (usually a `Project.id` UUID). Defaults to "Default Project" for legacy rows. */
+  project: string;
+  /** Human-readable session title. Defaults to "Untitled" when not provided. */
+  title: string;
   model: string;
   claude_pid: number;
   terminal_pid: number;
@@ -63,6 +67,10 @@ export interface LaunchInput {
   auto_continue?: boolean;
   resume_prompt?: string;
   subtask_id?: string;
+  /** Optional human-readable title; backend defaults to the project's display name. */
+  title?: string;
+  /** Optional explicit `Project.id` to associate the session with; overrides the auto-upsert from project_dir. */
+  project?: string;
 }
 
 export interface UpdateInfo {
