@@ -89,13 +89,32 @@ pub(crate) fn build_wt_argv(req: &SpawnRequest, command: &str) -> Vec<String> {
     ]
 }
 
+/// Normalize a prompt string so it survives going through a `.bat` file:
+///
+/// - Collapse every line break to a space. A literal newline inside a quoted
+///   prompt in a `.bat` terminates the cmd.exe statement, so a multi-line
+///   subtask from the planner would be cut off at the first `\n`.
+/// - Double every `%`. Even inside double quotes, cmd.exe expands `%FOO%`
+///   variables in a `.bat`; doubling makes the literal percent survive.
+///
+/// `shell_escape::windows::escape` already handles the quote-wrapping and
+/// inner-quote escaping; this just covers the two characters it doesn't.
+fn sanitize_prompt_for_bat(prompt: &str) -> String {
+    prompt
+        .replace("\r\n", " ")
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .replace('%', "%%")
+}
+
 /// Write a per-launch wrapper batch file that runs claude with stderr
 /// redirected to `err_path`. Lets `wait_for_claude` surface claude's actual
 /// failure message in the toast when the process exits early.
 fn write_launcher_bat(bat_path: &Path, err_path: &Path, req: &SpawnRequest) -> AppResult<()> {
+    let sanitized = req.prompt.as_deref().map(sanitize_prompt_for_bat);
     let claude_cmd = crate::spawner::build_claude_command(
         &req.model,
-        req.prompt.as_deref(),
+        sanitized.as_deref(),
         req.resume.as_deref(),
         &req.effort,
         &req.permission_mode,
@@ -417,6 +436,53 @@ mod tests {
         let argv = build_wt_argv(&req("C:\\"), CMD);
         let title_idx = argv.iter().position(|a| a == "--title").unwrap();
         assert_eq!(argv[title_idx + 1], "FastClaude: session");
+    }
+
+    #[test]
+    fn sanitize_prompt_collapses_line_breaks_to_spaces() {
+        assert_eq!(
+            sanitize_prompt_for_bat("first line\r\nsecond line\nthird\r"),
+            "first line second line third "
+        );
+    }
+
+    #[test]
+    fn sanitize_prompt_doubles_percent_signs() {
+        assert_eq!(
+            sanitize_prompt_for_bat("set USER=%USERNAME% and 50%"),
+            "set USER=%%USERNAME%% and 50%%"
+        );
+    }
+
+    #[test]
+    fn sanitize_prompt_passes_through_safe_text() {
+        let raw = "Refactor the auth module to use OAuth 2.0 with PKCE.";
+        assert_eq!(sanitize_prompt_for_bat(raw), raw);
+    }
+
+    #[test]
+    fn write_launcher_bat_sanitizes_multiline_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let bat = dir.path().join("ml.bat");
+        let err = dir.path().join("ml.err");
+        let mut r = req("C:\\proj");
+        r.prompt = Some("first line\nsecond line".into());
+        write_launcher_bat(&bat, &err, &r).unwrap();
+        let content = std::fs::read_to_string(&bat).unwrap();
+        // The .bat body line that runs claude must be a single physical line
+        // (apart from the leading @echo off line). Splitting on \r\n and
+        // counting non-empty lines confirms the prompt's newline was collapsed.
+        let lines: Vec<&str> = content.split("\r\n").filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "expected @echo off + one claude line, got {} lines: {content:?}",
+            lines.len()
+        );
+        assert!(
+            lines[1].contains("first line second line"),
+            "prompt should be joined with a space: {content:?}"
+        );
     }
 
     #[test]
