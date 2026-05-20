@@ -20,6 +20,7 @@ fn main() {
         .plugin(tauri_plugin_autostart::Builder::new()
             .args(["--launched-by-autostart"])
             .build())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir).ok();
@@ -31,16 +32,32 @@ fn main() {
             let db_path = data_dir.join("state.db");
             let registry = Arc::new(Registry::open(&db_path).expect("open registry"));
 
+            let projects_path = data_dir.join("projects.db");
+            let projects_reg = Arc::new(
+                fastclaude_lib::projects::Projects::open(&projects_path)
+                    .expect("open projects"),
+            );
+            let todos_path = data_dir.join("todos.db");
+            let todos_reg = Arc::new(
+                fastclaude_lib::todos::Todos::open(&todos_path).expect("open todos"),
+            );
+            let planner_runner: Arc<dyn fastclaude_lib::planner::PlannerRunner> =
+                Arc::new(fastclaude_lib::planner::RealRunner);
+
             reconcile_startup(&registry);
 
             let spawner_arc: Arc<dyn fastclaude_lib::spawner::Spawner> = spawner::default_spawner();
             let state = AppState {
                 registry: registry.clone(),
+                projects: projects_reg.clone(),
+                todos: todos_reg.clone(),
+                planner_runner: planner_runner.clone(),
                 spawner: spawner_arc.clone(),
                 focus: window_focus::default_focus(),
                 config: cfg_arc.clone(),
                 config_path: cfg_path.clone(),
                 is_first_run: AtomicBool::new(was_created),
+                planning_in_flight: Arc::new(Mutex::new(Default::default())),
             };
             app.manage(state);
 
@@ -111,6 +128,8 @@ fn main() {
             let registry_for_poller = registry.clone();
             let cfg_for_poller = cfg_arc.clone();
             let spawner_for_poller = spawner_arc.clone();
+            let todos_for_poller = todos_reg.clone();
+            let registry_for_closure = registry.clone();
             tauri::async_runtime::spawn(async move {
                 poller::run_loop(
                     registry_for_poller,
@@ -123,6 +142,15 @@ fn main() {
                             || !fire_report.fired_ids.is_empty()
                             || !fire_report.failed_ids.is_empty()
                             || !fire_report.gave_up_ids.is_empty();
+                        for ended_id in &tick_report.ended_ids {
+                            if let Ok(Some(todo_id)) = fastclaude_lib::commands::recompute_todo_for_session(
+                                &registry_for_closure,
+                                &todos_for_poller,
+                                ended_id,
+                            ) {
+                                let _ = app_handle.emit("todo-changed", &todo_id);
+                            }
+                        }
                         for id in &fire_report.fired_ids {
                             let _ = app_handle.emit("auto-continue-fired", id);
                         }
@@ -163,6 +191,28 @@ fn main() {
             commands::clear_first_run,
             commands::check_for_update,
             commands::install_update,
+            commands::list_projects,
+            commands::list_hidden_projects,
+            commands::upsert_project,
+            commands::set_project_name,
+            commands::set_project_pinned,
+            commands::set_project_hidden,
+            commands::delete_project,
+            commands::list_todos,
+            commands::list_subtasks,
+            commands::create_todo,
+            commands::delete_todo,
+            commands::mark_todo_finished,
+            commands::dismiss_auto_suggest,
+            commands::add_manual_subtask,
+            commands::edit_subtask,
+            commands::delete_subtask,
+            commands::reorder_subtasks,
+            commands::plan_todo,
+            commands::launch_subtask,
+            commands::launch_all_subtasks,
+            commands::get_subtask,
+            commands::get_todo,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

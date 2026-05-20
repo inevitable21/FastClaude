@@ -77,6 +77,7 @@ pub fn fire_due_resumes(
                     resume_count: s.resume_count + 1,
                     jsonl_path: s.jsonl_path.clone(),
                     jsonl_offset: s.jsonl_offset,
+                    subtask_id: s.subtask_id.clone(),
                 })?;
                 registry.record_resume_success(&s.id, &new_row.id)?;
                 report.fired_ids.push(s.id.clone());
@@ -363,6 +364,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc-1234.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
@@ -410,6 +412,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
@@ -436,6 +439,7 @@ mod tests {
             resume_count: 1, // already at cap
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         let _ = r.set_pending_resume(&s.id, 500); // no-op due to cap check
@@ -463,6 +467,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
@@ -491,6 +496,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         r.set_jsonl_path(&s.id, "/tmp/abc.jsonl").unwrap();
         r.set_pending_resume(&s.id, 500).unwrap();
@@ -530,6 +536,7 @@ mod tests {
                 resume_count: 0,
                 jsonl_path: None,
                 jsonl_offset: 0,
+                subtask_id: None,
             })
             .unwrap();
         let dead = r
@@ -545,6 +552,7 @@ mod tests {
                 resume_count: 0,
                 jsonl_path: None,
                 jsonl_offset: 0,
+                subtask_id: None,
             })
             .unwrap();
         let mut probe = FakeProbe([100u32].into_iter().collect());
@@ -577,6 +585,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
 
         let mut jsonl = NamedTempFile::new().unwrap();
@@ -642,6 +651,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
 
         let mut jsonl = NamedTempFile::new().unwrap();
@@ -682,6 +692,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         let mut jsonl = NamedTempFile::new().unwrap();
         writeln!(
@@ -715,6 +726,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         // Predecessor has a JSONL path and an advanced offset (already processed
         // the limit-hit line and prior tokens).
@@ -756,6 +768,7 @@ mod tests {
             resume_count: 0,
             jsonl_path: None,
             jsonl_offset: 0,
+            subtask_id: None,
         }).unwrap();
         let mut jsonl = NamedTempFile::new().unwrap();
         writeln!(

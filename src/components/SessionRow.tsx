@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import type { Session } from "@/types";
 import { focusSession, killSession, setAutoContinue as setAutoContinueIpc } from "@/lib/ipc";
+import { ParentTodoBadge } from "./ParentTodoBadge";
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
@@ -86,6 +87,7 @@ export function SessionRow({
       <div aria-hidden className={`h-2 w-2 rounded-full flex-shrink-0 ${dotClass}`} />
       <div className="flex-1 min-w-0">
         <div className="font-semibold text-sm truncate">{projectName}</div>
+        {session.subtask_id && <ParentTodoBadge subtaskId={session.subtask_id} />}
         <div className="text-xs text-muted-foreground truncate font-mono">{session.project_dir}</div>
       </div>
       {session.tokens_out > 0 && (
