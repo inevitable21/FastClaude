@@ -57,7 +57,9 @@ const HOST_NAMES: &[&str] = &[
     "conhost.exe",
 ];
 
-/// Build the argv (after the executable) passed to Windows Terminal.
+/// Build the argv (after the executable) passed to Windows Terminal when the
+/// command-to-run is a single cmd.exe-parsed string (the legacy `.bat` path,
+/// kept for the no-prompt case).
 ///
 /// `command` is what cmd.exe runs after `/K` — typically the path to a
 /// per-launch wrapper .bat file (see `write_launcher_bat`) which redirects
@@ -68,6 +70,27 @@ const HOST_NAMES: &[&str] = &[
 /// flags (`-d`, `--title`), then the command. Putting `--title` ahead of
 /// `-w new` makes wt drop the rest and the spawned cmd never runs.
 pub(crate) fn build_wt_argv(req: &SpawnRequest, command: &str) -> Vec<String> {
+    let mut argv = build_wt_prefix(req);
+    argv.push("cmd.exe".into());
+    argv.push("/K".into());
+    argv.push(command.into());
+    argv
+}
+
+/// Build the argv to launch claude.exe DIRECTLY under wt — no cmd.exe shell,
+/// no .bat wrapper. Used whenever a prompt is present so the prompt text
+/// survives intact (cmd.exe's parsing of quoted args mangles characters like
+/// `"`, and that ate the user's planner subtasks). Rust's `Command::args` and
+/// wt's argv handling do CommandLineToArgvW-compatible quoting end-to-end, so
+/// special characters in the prompt arrive at claude.exe unchanged.
+pub(crate) fn build_wt_direct_argv(req: &SpawnRequest) -> Vec<String> {
+    let mut argv = build_wt_prefix(req);
+    argv.push("claude".into());
+    argv.extend(build_claude_argv(req));
+    argv
+}
+
+fn build_wt_prefix(req: &SpawnRequest) -> Vec<String> {
     let project_name = std::path::Path::new(&req.project_dir)
         .file_name()
         .and_then(|s| s.to_str())
@@ -83,10 +106,40 @@ pub(crate) fn build_wt_argv(req: &SpawnRequest, command: &str) -> Vec<String> {
         // claude CLI emits its own ANSI title escape ("Claude Code") on
         // startup that overwrites --title; this flag tells wt to ignore it.
         "--suppressApplicationTitle".into(),
-        "cmd.exe".into(),
-        "/K".into(),
-        command.into(),
     ]
+}
+
+/// Build the argv for claude.exe itself (without the executable name). The
+/// caller appends this after `claude` or `claude.exe` in their argv list.
+///
+/// `extra_args` is split on whitespace into separate argv tokens. This loses
+/// some fidelity for users who want to pass a flag value containing spaces via
+/// `extra_args`, but accepts the trade-off for clean prompt passing — the
+/// alternative is shell parsing, which is what this whole code path exists to
+/// avoid. Multi-word flag values can still be added through the regular
+/// `--effort` / `--permission-mode` fields, which are passed atomically.
+pub(crate) fn build_claude_argv(req: &SpawnRequest) -> Vec<String> {
+    let mut a: Vec<String> = vec!["--model".into(), req.model.clone()];
+    if !req.effort.is_empty() {
+        a.push("--effort".into());
+        a.push(req.effort.clone());
+    }
+    if !req.permission_mode.is_empty() {
+        a.push("--permission-mode".into());
+        a.push(req.permission_mode.clone());
+    }
+    if let Some(id) = req.resume.as_deref().filter(|s| !s.is_empty()) {
+        a.push("--resume".into());
+        a.push(id.to_string());
+    }
+    let extra = req.extra_args.trim();
+    if !extra.is_empty() {
+        a.extend(extra.split_whitespace().map(String::from));
+    }
+    if let Some(p) = req.prompt.as_deref().filter(|s| !s.is_empty()) {
+        a.push(p.to_string());
+    }
+    a
 }
 
 /// Normalize a prompt string so it survives going through a `.bat` file:
@@ -136,34 +189,67 @@ impl Spawner for WindowsSpawner {
         }
         let choice = resolve_terminal(&req.terminal_program)?;
 
-        // Per-launch wrapper bat + err file under %TEMP%. The bat invokes
-        // claude with `2> "<err>"` so wait_for_claude can surface claude's
-        // own error message if it exits early.
+        // When a prompt is present we invoke claude.exe directly under wt with
+        // a proper argv — no cmd.exe, no .bat, no shell escaping at all.
+        // cmd.exe's quoted-argument parsing mangles `"`, `&`, etc. inside the
+        // prompt text, which truncated planner-generated subtasks. The price
+        // is losing the per-launch stderr-capture .err file; claude's stderr
+        // shows up in the wt window instead, which is visible to the user.
+        //
+        // No-prompt launches keep the .bat path so the stderr capture remains
+        // available for diagnosing startup failures (bad model name, auth,
+        // missing dependencies, etc.).
+        let prompt_present = req
+            .prompt
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+
         let launch_id = uuid::Uuid::new_v4();
         let temp = std::env::temp_dir();
         let bat_path = temp.join(format!("fastclaude-{launch_id}.bat"));
         let err_path = temp.join(format!("fastclaude-{launch_id}.err"));
-        write_launcher_bat(&bat_path, &err_path, req)?;
+        if !prompt_present {
+            write_launcher_bat(&bat_path, &err_path, req)?;
+        }
         let bat_str = bat_path.to_string_lossy().to_string();
 
-        let mut cmd = match &choice {
-            TerminalChoice::WindowsTerminal(path) => {
-                // -w new forces a new top-level window so each session is its
-                // own HWND and Kill can close just this window.
+        let mut cmd = match (&choice, prompt_present) {
+            (TerminalChoice::WindowsTerminal(path), true) => {
+                let mut c = Command::new(path);
+                c.args(build_wt_direct_argv(req));
+                c
+            }
+            (TerminalChoice::WindowsTerminal(path), false) => {
                 let mut c = Command::new(path);
                 c.args(build_wt_argv(req, &bat_str));
                 c
             }
-            TerminalChoice::Cmd => {
+            (TerminalChoice::Custom(path), true) => {
+                let mut c = Command::new(path);
+                c.args(build_wt_direct_argv(req));
+                c
+            }
+            (TerminalChoice::Custom(path), false) => {
+                let mut c = Command::new(path);
+                c.args(build_wt_argv(req, &bat_str));
+                c
+            }
+            (TerminalChoice::Cmd, _) => {
+                // cmd.exe fallback — no wt available. Still uses the .bat
+                // because there's no wt to take a direct argv. The prompt
+                // sanitizer (newline+%) covers the common breakage; complex
+                // prompts may still mangle here. The recommended fix for
+                // users on this path is to install Windows Terminal.
+                if prompt_present {
+                    // We skipped write_launcher_bat above; write it now since
+                    // this fallback path still needs the .bat.
+                    write_launcher_bat(&bat_path, &err_path, req)?;
+                }
                 let inner = format!("start \"FastClaude\" cmd.exe /K \"{bat_str}\"");
                 let mut c = Command::new("cmd.exe");
                 c.args(["/C", &inner]);
                 c.current_dir(&req.project_dir);
-                c
-            }
-            TerminalChoice::Custom(path) => {
-                let mut c = Command::new(path);
-                c.args(build_wt_argv(req, &bat_str));
                 c
             }
         };
@@ -436,6 +522,72 @@ mod tests {
         let argv = build_wt_argv(&req("C:\\"), CMD);
         let title_idx = argv.iter().position(|a| a == "--title").unwrap();
         assert_eq!(argv[title_idx + 1], "FastClaude: session");
+    }
+
+    #[test]
+    fn build_claude_argv_minimal_request() {
+        let argv = build_claude_argv(&req("C:\\proj"));
+        assert_eq!(argv, vec!["--model", "claude-opus-4-7"]);
+    }
+
+    #[test]
+    fn build_claude_argv_passes_prompt_as_last_atomic_token() {
+        let mut r = req("C:\\proj");
+        r.prompt = Some(r#"Build "auth" module with & without OAuth"#.into());
+        let argv = build_claude_argv(&r);
+        // The prompt MUST appear as a single argv element — that's the whole
+        // point of bypassing cmd.exe. If splitting ever sneaks in, this fails.
+        assert_eq!(argv.last().unwrap(), r#"Build "auth" module with & without OAuth"#);
+        assert!(argv.iter().any(|a| a == "--model"), "model flag still present");
+    }
+
+    #[test]
+    fn build_claude_argv_preserves_newlines_and_percents_in_prompt() {
+        // Direct argv path doesn't need the .bat sanitizer — newlines and
+        // percents are just bytes in the prompt argument.
+        let mut r = req("C:\\proj");
+        r.prompt = Some("line one\nline two\n%PATH% should stay literal".into());
+        let argv = build_claude_argv(&r);
+        assert_eq!(
+            argv.last().unwrap(),
+            "line one\nline two\n%PATH% should stay literal"
+        );
+    }
+
+    #[test]
+    fn build_claude_argv_splits_extra_args_on_whitespace() {
+        let mut r = req("C:\\proj");
+        r.extra_args = "--verbose --debug".into();
+        let argv = build_claude_argv(&r);
+        assert!(argv.iter().any(|a| a == "--verbose"));
+        assert!(argv.iter().any(|a| a == "--debug"));
+    }
+
+    #[test]
+    fn build_claude_argv_includes_effort_permission_resume_atomically() {
+        let mut r = req("C:\\proj");
+        r.effort = "high".into();
+        r.permission_mode = "accept-edits".into();
+        r.resume = Some("session-123".into());
+        let argv = build_claude_argv(&r);
+        let find = |flag: &str| argv.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone());
+        assert_eq!(find("--effort"), Some("high".into()));
+        assert_eq!(find("--permission-mode"), Some("accept-edits".into()));
+        assert_eq!(find("--resume"), Some("session-123".into()));
+    }
+
+    #[test]
+    fn build_wt_direct_argv_runs_claude_under_wt_without_cmd_shell() {
+        let mut r = req("C:\\proj");
+        r.prompt = Some(r#"prompt with "quotes" and & ampersand"#.into());
+        let argv = build_wt_direct_argv(&r);
+        // No cmd.exe in the argv — that's the whole point.
+        assert!(!argv.iter().any(|a| a.eq_ignore_ascii_case("cmd.exe") || a == "/K"));
+        // claude appears as its own argv element followed by --model.
+        let claude_idx = argv.iter().position(|a| a == "claude").expect("claude in argv");
+        assert_eq!(argv[claude_idx + 1], "--model");
+        // The prompt is the last argv element, intact.
+        assert_eq!(argv.last().unwrap(), r#"prompt with "quotes" and & ampersand"#);
     }
 
     #[test]
