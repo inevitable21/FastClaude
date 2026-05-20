@@ -10,7 +10,11 @@ const PROMPT_TEMPLATE: &str = "You are a planning assistant. Decompose the follo
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_SUBTASKS_ACCEPTED: usize = 8;
-const MAX_SUBTASK_LEN: usize = 500;
+/// Generous ceiling — subtasks are prompts that go straight into a `claude`
+/// session, not short labels, so they can legitimately be paragraph-length.
+/// The cap exists only to catch a model returning a giant blob, not to enforce
+/// brevity.
+const MAX_SUBTASK_LEN: usize = 4000;
 
 pub fn build_prompt(title: &str, project_name: &str) -> String {
     PROMPT_TEMPLATE
