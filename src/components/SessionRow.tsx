@@ -44,6 +44,9 @@ function errMessage(e: unknown): string {
 
 const DEFAULT_TITLE = "Untitled";
 
+/** Mime type used by drag-and-drop to move sessions onto sidebar projects. */
+export const DRAG_MIME = "application/x-fastclaude-session-id";
+
 export function SessionRow({
   session,
   onChange,
@@ -197,9 +200,16 @@ export function SessionRow({
 
   return (
     <div
-      className="flex items-center gap-3 rounded-lg glass-panel p-3 transition-colors hover:border-border-strong animate-row-in"
+      className="flex items-center gap-3 rounded-lg glass-panel p-3 transition-colors hover:border-border-strong animate-row-in cursor-grab active:cursor-grabbing"
       style={{ animationDelay: `${index * 70}ms` }}
       onContextMenu={openMenu}
+      draggable={!editingTitle}
+      onDragStart={(e) => {
+        // Custom mime type lets sidebar drop targets filter on dragover
+        // without leaking session ids into plain-text drops elsewhere.
+        e.dataTransfer.setData(DRAG_MIME, session.id);
+        e.dataTransfer.effectAllowed = "move";
+      }}
     >
       <div aria-hidden className={`h-2 w-2 rounded-full flex-shrink-0 ${dotClass}`} />
       <div className="flex-1 min-w-0">

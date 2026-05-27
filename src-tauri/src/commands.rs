@@ -121,6 +121,17 @@ pub fn launch_session(
             .unwrap_or_else(|| cfg.default_extra_args.clone()),
         from_todo,
     };
+    // Pre-flight: the spawner's `wt -d <dir>` (and the cmd-fallback's
+    // `current_dir`) silently misbehave when the path doesn't resolve to a
+    // real directory — wt opens an empty tab without claude, cmd refuses to
+    // spawn at all. Fail here with a message the dashboard can surface,
+    // instead of letting the user see a stuck-looking terminal.
+    if !std::path::Path::new(&req.project_dir).is_dir() {
+        return Err(crate::error::AppError::Invalid(format!(
+            "project folder does not exist on disk: {}",
+            req.project_dir
+        )));
+    }
     let result = state.spawner.spawn(&req)?;
     // Auto-create / refresh the project entry so the sidebar reflects this
     // folder, AND so we have a stable project id to store on the session.
@@ -986,7 +997,9 @@ mod tests {
         use crate::todos::Todos;
         let projects = Projects::open_in_memory().unwrap();
         let todos = Todos::open_in_memory().unwrap();
-        let p = projects.upsert_for_path("/foo").unwrap();
+        // `upsert_for_path` now requires a real on-disk directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let p = projects.upsert_for_path(&tmp.path().to_string_lossy()).unwrap();
         let _ = todos.create_todo(&p.id, "a todo").unwrap();
         // Mirror the guard in delete_project: list todos then refuse.
         let listed = todos.list_todos_for_project(&p.id).unwrap();

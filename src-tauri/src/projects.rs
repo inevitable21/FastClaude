@@ -57,10 +57,27 @@ impl Projects {
     }
 
     pub fn upsert_for_path(&self, raw_path: &str) -> AppResult<Project> {
-        let norm = normalize_project_dir(raw_path);
-        if norm.is_empty() {
+        let trimmed = raw_path.trim();
+        if trimmed.is_empty() {
             return Err(AppError::Invalid("project path is empty".into()));
         }
+        // Reject non-path inputs at the data layer so the launch path never
+        // sees a `norm_path` it can't actually `cd` into. Without this guard,
+        // a user typing "asdasd" into the LaunchDialog folder input would
+        // upsert a permanent project row whose later TODO launches all fail
+        // silently because `wt -d asdasd` can't set a real working directory.
+        let p = Path::new(trimmed);
+        if !p.is_absolute() {
+            return Err(AppError::Invalid(format!(
+                "project path must be absolute: {trimmed:?}"
+            )));
+        }
+        if !p.is_dir() {
+            return Err(AppError::Invalid(format!(
+                "project folder does not exist: {trimmed}"
+            )));
+        }
+        let norm = normalize_project_dir(trimmed);
         let conn = self.conn.lock().unwrap();
         let existing: Option<Project> = conn
             .query_row(
@@ -196,25 +213,45 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     fn make() -> Projects {
         Projects::open_in_memory().unwrap()
     }
 
+    /// Create a directory inside `root` and return its absolute path as a
+    /// `String`. Validation in [`Projects::upsert_for_path`] requires real
+    /// on-disk directories, so every test creates one rather than passing a
+    /// fake string. `name` becomes the directory's basename, which is what
+    /// `default_display_name` keys on for display.
+    fn make_dir(root: &TempDir, name: &str) -> String {
+        let p = root.path().join(name);
+        std::fs::create_dir_all(&p).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
     #[test]
     fn upsert_creates_then_returns_same_row() {
         let p = make();
-        let a = p.upsert_for_path("C:/Code/MyApp").unwrap();
-        let b = p.upsert_for_path("C:/Code/MyApp").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let path = make_dir(&tmp, "myapp");
+        let a = p.upsert_for_path(&path).unwrap();
+        let b = p.upsert_for_path(&path).unwrap();
         assert_eq!(a.id, b.id);
         assert_eq!(a.display_name, "myapp");
     }
 
     #[test]
     fn upsert_normalizes_path_variants() {
+        // Same on-disk folder, two textual representations: with native
+        // separators and with forward slashes. Both must collapse to the
+        // same `norm_path` and return the same project id.
         let p = make();
-        let a = p.upsert_for_path("C:\\Code\\MyApp").unwrap();
-        let b = p.upsert_for_path("c:/code/myapp/").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let dir = make_dir(&tmp, "myapp");
+        let with_forward = dir.replace('\\', "/");
+        let a = p.upsert_for_path(&dir).unwrap();
+        let b = p.upsert_for_path(&with_forward).unwrap();
         assert_eq!(a.id, b.id);
     }
 
@@ -222,6 +259,28 @@ mod tests {
     fn upsert_rejects_empty_path() {
         let p = make();
         assert!(matches!(p.upsert_for_path(""), Err(AppError::Invalid(_))));
+        assert!(matches!(p.upsert_for_path("   "), Err(AppError::Invalid(_))));
+    }
+
+    #[test]
+    fn upsert_rejects_non_absolute_path() {
+        // The whole point of the on-disk guard: stop "asdasd" /
+        // "newmessanger" from ever becoming permanent project rows.
+        let p = make();
+        assert!(matches!(p.upsert_for_path("asdasd"), Err(AppError::Invalid(_))));
+        assert!(matches!(
+            p.upsert_for_path("relative/path"),
+            Err(AppError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn upsert_rejects_absolute_path_that_doesnt_exist() {
+        let p = make();
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        let res = p.upsert_for_path(&missing.to_string_lossy());
+        assert!(matches!(res, Err(AppError::Invalid(_))));
     }
 
     #[test]
@@ -233,9 +292,10 @@ mod tests {
     #[test]
     fn list_orders_pinned_first_then_created_desc() {
         let p = make();
-        let a = p.upsert_for_path("/p/a").unwrap();
-        let b = p.upsert_for_path("/p/b").unwrap();
-        let c = p.upsert_for_path("/p/c").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let a = p.upsert_for_path(&make_dir(&tmp, "a")).unwrap();
+        let b = p.upsert_for_path(&make_dir(&tmp, "b")).unwrap();
+        let c = p.upsert_for_path(&make_dir(&tmp, "c")).unwrap();
         p.set_pinned(&b.id, true).unwrap();
         let listed = p.list_visible().unwrap();
         let ids: Vec<_> = listed.iter().map(|x| x.id.clone()).collect();
@@ -246,19 +306,21 @@ mod tests {
     #[test]
     fn list_visible_excludes_hidden() {
         let p = make();
-        let _a = p.upsert_for_path("/p/a").unwrap();
-        let b = p.upsert_for_path("/p/b").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let a = p.upsert_for_path(&make_dir(&tmp, "a")).unwrap();
+        let b = p.upsert_for_path(&make_dir(&tmp, "b")).unwrap();
         p.set_hidden(&b.id, true).unwrap();
         let listed = p.list_visible().unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].norm_path, "/p/a");
+        assert_eq!(listed[0].id, a.id);
     }
 
     #[test]
     fn list_hidden_returns_only_hidden() {
         let p = make();
-        let _a = p.upsert_for_path("/p/a").unwrap();
-        let b = p.upsert_for_path("/p/b").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let _a = p.upsert_for_path(&make_dir(&tmp, "a")).unwrap();
+        let b = p.upsert_for_path(&make_dir(&tmp, "b")).unwrap();
         p.set_hidden(&b.id, true).unwrap();
         let listed = p.list_hidden().unwrap();
         assert_eq!(listed.len(), 1);
@@ -268,7 +330,8 @@ mod tests {
     #[test]
     fn set_display_name_persists_and_rejects_empty() {
         let p = make();
-        let a = p.upsert_for_path("/p/a").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let a = p.upsert_for_path(&make_dir(&tmp, "a")).unwrap();
         p.set_display_name(&a.id, "Alpha").unwrap();
         assert_eq!(p.get(&a.id).unwrap().display_name, "Alpha");
         assert!(matches!(p.set_display_name(&a.id, "  "), Err(AppError::Invalid(_))));
@@ -277,7 +340,8 @@ mod tests {
     #[test]
     fn delete_removes_row_and_returns_not_found_after() {
         let p = make();
-        let a = p.upsert_for_path("/p/a").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let a = p.upsert_for_path(&make_dir(&tmp, "a")).unwrap();
         p.delete(&a.id).unwrap();
         assert!(matches!(p.get(&a.id), Err(AppError::NotFound(_))));
     }
