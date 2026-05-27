@@ -80,10 +80,8 @@ export default function App() {
               selectedProject ? (
                 <ProjectPane project={selectedProject} onLaunch={() => setLaunchOpen(true)} />
               ) : (
-                <Dashboard launchOpen={false} setLaunchOpen={() => {}} />
+                <Dashboard onLaunch={() => setLaunchOpen(true)} />
               )
-            ) : view === "dashboard" ? (
-              <Dashboard launchOpen={launchOpen} setLaunchOpen={setLaunchOpen} />
             ) : view === "history" ? (
               <History />
             ) : (

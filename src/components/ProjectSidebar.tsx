@@ -6,16 +6,14 @@ import {
   setProjectName,
   setProjectPinned,
   setProjectHidden,
+  setSessionProject,
   upsertProject,
   onProjectChanged,
 } from "@/lib/ipc";
-import { open as openDialog } from "@tauri-apps/plugin-dialog"; /* see note below */
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types";
-
-/* NOTE: `@tauri-apps/plugin-dialog` is not currently a dependency. If the
-   import errors at build time, replace it with a simple text prompt for v1:
-     const path = window.prompt("Project folder path");
-   and revisit adding the dialog plugin in a follow-up. */
+import { DRAG_MIME } from "./SessionRow";
 
 interface Props {
   selectedId: string | null; // null = "All sessions"
@@ -23,11 +21,40 @@ interface Props {
 }
 
 export function ProjectSidebar({ selectedId, onSelect }: Props) {
+  const { toast } = useToast();
   const [projects, setProjects] = useState<Project[]>([]);
   const [hiddenProjects, setHiddenProjects] = useState<Project[]>([]);
   const [showHidden, setShowHidden] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
+  // id of the project row a session is currently being dragged over.
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
+  function hasSessionDrag(e: React.DragEvent): boolean {
+    // dataTransfer.types is the only payload visible during dragover —
+    // getData() returns "" outside drop for security reasons.
+    return Array.from(e.dataTransfer.types).includes(DRAG_MIME);
+  }
+
+  async function handleDrop(e: React.DragEvent, project: Project) {
+    e.preventDefault();
+    setDropTargetId(null);
+    const sessionId = e.dataTransfer.getData(DRAG_MIME);
+    if (!sessionId) return;
+    try {
+      await setSessionProject(sessionId, project.id);
+      toast({ title: `Moved to ${project.display_name}` });
+    } catch (err) {
+      toast({
+        title: "Couldn't move session",
+        description:
+          typeof err === "string"
+            ? err
+            : (err as { message?: string })?.message ?? String(err),
+        variant: "destructive",
+      });
+    }
+  }
 
   const refresh = useCallback(() => {
     listProjects().then(setProjects).catch(() => setProjects([]));
@@ -42,28 +69,66 @@ export function ProjectSidebar({ selectedId, onSelect }: Props) {
   }, [refresh]);
 
   async function pickFolder() {
+    // Native folder picker only — no `window.prompt` fallback. The prompt
+    // path let users type bare strings like "asdasd" that became permanent
+    // project rows whose later TODO launches failed silently because
+    // `wt -d asdasd` can't set a real cwd.
     let path: string | null = null;
     try {
       const picked = await openDialog({ directory: true, multiple: false });
       path = typeof picked === "string" ? picked : null;
-    } catch {
-      path = window.prompt("Project folder path");
+    } catch (e) {
+      toast({
+        title: "Folder picker unavailable",
+        description:
+          typeof e === "string"
+            ? e
+            : (e as { message?: string })?.message ?? String(e),
+        variant: "destructive",
+      });
+      return;
     }
-    if (path) {
+    if (!path) return;
+    try {
       const p = await upsertProject(path);
       onSelect(p.id);
+    } catch (err) {
+      toast({
+        title: "Couldn't add project",
+        description:
+          typeof err === "string"
+            ? err
+            : (err as { message?: string })?.message ?? String(err),
+        variant: "destructive",
+      });
     }
   }
 
   function renderRow(p: Project, dimmed = false) {
     const selected = p.id === selectedId;
+    const dropping = dropTargetId === p.id;
     return (
       <div
         key={p.id}
         className={`group flex items-center justify-between px-2 py-1 text-xs cursor-pointer ${
           selected ? "bg-foreground/10 border-l-2 border-accent pl-[6px]" : "border-l-2 border-transparent"
-        } ${dimmed ? "opacity-50" : ""}`}
+        } ${dimmed ? "opacity-50" : ""} ${
+          dropping ? "ring-1 ring-accent bg-accent/15" : ""
+        }`}
         onClick={() => onSelect(p.id)}
+        onDragOver={(e) => {
+          if (!hasSessionDrag(e)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          if (dropTargetId !== p.id) setDropTargetId(p.id);
+        }}
+        onDragLeave={(e) => {
+          // Ignore leave events into child elements; only clear when the
+          // pointer actually exits the row.
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          if (dropTargetId === p.id) setDropTargetId(null);
+        }}
+        onDrop={(e) => handleDrop(e, p)}
       >
         {editingId === p.id ? (
           <input

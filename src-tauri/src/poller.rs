@@ -207,11 +207,25 @@ pub fn tick(
                 // carries the default placeholder. Failures are non-fatal —
                 // the title just stays "Untitled" until a later trigger or the
                 // user renames it.
+                //
+                // Tries the first user message; if that's too terse to derive a
+                // title from (e.g. "hi", "/continue"), falls back to scanning
+                // later user messages for the overall conversation topic. Both
+                // attempts run each qualifying tick — the gate stays open
+                // (`title == DEFAULT_TITLE`) until one of them succeeds.
                 if s.title == DEFAULT_TITLE && delta.tokens_out > 0 {
-                    if let Ok(Some(raw)) = title::extract_first_user_message(&jsonl) {
-                        if let Some(t) = title::derive_title(&raw) {
-                            let _ = registry.set_title(&s.id, &t);
-                        }
+                    let derived = title::extract_first_user_message(&jsonl)
+                        .ok()
+                        .flatten()
+                        .and_then(|raw| title::derive_title(&raw))
+                        .or_else(|| {
+                            title::extract_conversation_topic(&jsonl)
+                                .ok()
+                                .flatten()
+                                .and_then(|raw| title::derive_title(&raw))
+                        });
+                    if let Some(t) = derived {
+                        let _ = registry.set_title(&s.id, &t);
                     }
                 }
 
@@ -795,6 +809,164 @@ mod tests {
             "successor reuses predecessor's JSONL (claude --resume appends to same file)");
         assert_eq!(succ.jsonl_offset, 5000,
             "successor starts from where predecessor left off so we don't re-tally");
+    }
+
+    #[test]
+    fn tick_auto_titles_session_from_first_user_message() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use crate::session_registry::{NewSession, DEFAULT_TITLE};
+
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            project: None,
+            title: None,
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: false,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
+            subtask_id: None,
+        }).unwrap();
+        assert_eq!(r.get(&s.id).unwrap().title, DEFAULT_TITLE, "starts as placeholder");
+
+        let mut jsonl = NamedTempFile::new().unwrap();
+        // User message (the title source) + assistant turn with usage (the
+        // trigger). The poller fires title generation on the first tick that
+        // sees new assistant output, while the title is still the placeholder.
+        writeln!(
+            jsonl,
+            r#"{{"type":"user","message":{{"role":"user","content":"please refactor the auth middleware"}}}}"#
+        ).unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"ok"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+        ).unwrap();
+        jsonl.flush().unwrap();
+        r.set_jsonl_path(&s.id, &jsonl.path().to_string_lossy()).unwrap();
+        r.backdate_last_activity(&s.id, 0).unwrap();
+
+        let mut probe = FakeProbe([1u32].into_iter().collect());
+        let report = tick(&r, &mut probe, &cfg, 1000).unwrap();
+        assert!(report.usage_changed, "tick processed the assistant tokens");
+
+        let got = r.get(&s.id).unwrap();
+        assert_eq!(
+            got.title, "Please refactor the auth middleware",
+            "title is derived from the first user message and capitalized"
+        );
+    }
+
+    #[test]
+    fn tick_falls_back_to_conversation_topic_when_first_message_too_short() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use crate::session_registry::{NewSession, DEFAULT_TITLE};
+
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            project: None,
+            title: None,
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: false,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
+            subtask_id: None,
+        }).unwrap();
+
+        let mut jsonl = NamedTempFile::new().unwrap();
+        // First user message is too terse to derive a title from. The poller
+        // must fall back to extract_conversation_topic for a usable label.
+        writeln!(
+            jsonl,
+            r#"{{"type":"user","message":{{"role":"user","content":"hi"}}}}"#
+        ).unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"hello"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+        ).unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"user","message":{{"role":"user","content":"can you add a login screen with email and password"}}}}"#
+        ).unwrap();
+        jsonl.flush().unwrap();
+        r.set_jsonl_path(&s.id, &jsonl.path().to_string_lossy()).unwrap();
+        r.backdate_last_activity(&s.id, 0).unwrap();
+
+        let mut probe = FakeProbe([1u32].into_iter().collect());
+        let _ = tick(&r, &mut probe, &cfg, 1000).unwrap();
+
+        let got = r.get(&s.id).unwrap();
+        assert_ne!(got.title, DEFAULT_TITLE, "fallback fired — title was updated");
+        // 7-word truncation with an ellipsis (derive_title's cap).
+        assert!(
+            got.title.starts_with("Can you add a login screen"),
+            "topic fallback used the substantive follow-up; got {:?}",
+            got.title
+        );
+    }
+
+    #[test]
+    fn tick_does_not_overwrite_user_provided_title() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use crate::session_registry::NewSession;
+
+        let r = Registry::open_in_memory().unwrap();
+        let cfg = Config::default();
+        let s = r.insert(NewSession {
+            project_dir: "/p".into(),
+            project: None,
+            title: Some("My Custom Title".into()),
+            model: "claude-opus-4-7".into(),
+            claude_pid: 1,
+            terminal_pid: 2,
+            terminal_window_handle: None,
+            auto_continue: false,
+            resume_prompt: None,
+            resume_cap: 3,
+            resume_count: 0,
+            jsonl_path: None,
+            jsonl_offset: 0,
+            subtask_id: None,
+        }).unwrap();
+
+        let mut jsonl = NamedTempFile::new().unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"user","message":{{"role":"user","content":"refactor the auth middleware"}}}}"#
+        ).unwrap();
+        writeln!(
+            jsonl,
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"ok"}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#
+        ).unwrap();
+        jsonl.flush().unwrap();
+        r.set_jsonl_path(&s.id, &jsonl.path().to_string_lossy()).unwrap();
+        r.backdate_last_activity(&s.id, 0).unwrap();
+
+        let mut probe = FakeProbe([1u32].into_iter().collect());
+        let _ = tick(&r, &mut probe, &cfg, 1000).unwrap();
+
+        let got = r.get(&s.id).unwrap();
+        assert_eq!(
+            got.title, "My Custom Title",
+            "user-provided title must survive — auto-titler only runs on placeholders"
+        );
     }
 
     #[test]
